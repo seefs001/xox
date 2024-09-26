@@ -13,6 +13,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # 设置整个job的超时时间为15分钟
     steps:
     - uses: actions/checkout@v4
 
@@ -23,6 +24,8 @@ jobs:
 
     - name: Build
       run: go build -v ./...
+      timeout-minutes: 5  # 设置构建步骤的超时时间为5分钟
 
     - name: Test
       run: go test -v ./...
+      timeout-minutes: 3  # 设置测试步骤的超时时间为10分钟
