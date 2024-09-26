@@ -21,7 +21,7 @@ func main() {
 		xlog.Error("Failed to add file logger", "error", err)
 	}
 
-	// Now logs will be output to both console and file
+	// Now logs will be output to both console and file without duplication
 	xlog.Info("This message will be logged to both console and file")
 
 	// Use the Catch function to wrap operations that may produce errors

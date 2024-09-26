@@ -7,11 +7,24 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/seefs001/xox/xcolor"
 )
 
-var defaultLogger = slog.New(NewColorConsoleHandler(os.Stdout, nil))
+var (
+	defaultLogger  *slog.Logger
+	defaultHandler slog.Handler
+)
+
+func init() {
+	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+	defaultLogger = slog.New(defaultHandler)
+}
 
 // Debug logs a debug message.
 func Debug(msg string, args ...any) {
@@ -55,18 +68,22 @@ func Errorf(format string, args ...any) {
 
 // ColorConsoleHandler implements a color console handler.
 type ColorConsoleHandler struct {
-	slog.Handler
-	w io.Writer
+	w      io.Writer
+	opts   *slog.HandlerOptions
+	attrs  []slog.Attr
+	groups []string
 }
 
 // NewColorConsoleHandler creates a new ColorConsoleHandler.
 func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) *ColorConsoleHandler {
 	if opts == nil {
-		opts = &slog.HandlerOptions{}
+		opts = &slog.HandlerOptions{
+			Level: slog.LevelInfo, // Default to INFO level
+		}
 	}
 	return &ColorConsoleHandler{
-		Handler: slog.NewTextHandler(w, opts),
-		w:       w,
+		w:    w,
+		opts: opts,
 	}
 }
 
@@ -76,27 +93,67 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	switch r.Level {
 	case slog.LevelDebug:
-		level = "\033[36m" + level + "\033[0m" // Cyan
+		level = xcolor.Colorize(xcolor.Cyan, level)
 	case slog.LevelInfo:
-		level = "\033[32m" + level + "\033[0m" // Green
+		level = xcolor.Colorize(xcolor.Green, level)
 	case slog.LevelWarn:
-		level = "\033[33m" + level + "\033[0m" // Yellow
+		level = xcolor.Colorize(xcolor.Yellow, level)
 	case slog.LevelError:
-		level = "\033[31m" + level + "\033[0m" // Red
+		level = xcolor.Colorize(xcolor.Red, level)
 	}
 
 	// Format output
-	_, err := fmt.Fprintf(h.w, "%s [%s] %s\n", r.Time.Format(time.RFC3339), level, r.Message)
-	if err != nil {
-		return err
+	timeStr := r.Time.Format(time.RFC3339)
+	msg := r.Message
+
+	// Apply attributes
+	var attrs []string
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
+		return true
+	})
+	attrStr := ""
+	if len(attrs) > 0 {
+		attrStr = " " + strings.Join(attrs, " ")
 	}
 
-	return h.Handler.Handle(ctx, r)
+	// Apply groups
+	prefix := strings.Join(h.groups, ".")
+	if prefix != "" {
+		prefix += "."
+	}
+
+	_, err := fmt.Fprintf(h.w, "%s [%s] %s%s%s\n", timeStr, level, prefix, msg, attrStr)
+	return err
 }
 
-// Add adds a new handler to the logger.
+// Enabled implements the slog.Handler interface.
+func (h *ColorConsoleHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	minLevel := slog.LevelInfo
+	if h.opts != nil && h.opts.Level != nil {
+		minLevel = h.opts.Level.Level()
+	}
+	return level >= minLevel
+}
+
+// WithAttrs implements the slog.Handler interface.
+func (h *ColorConsoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandler := *h
+	newHandler.attrs = append(newHandler.attrs, attrs...)
+	return &newHandler
+}
+
+// WithGroup implements the slog.Handler interface.
+func (h *ColorConsoleHandler) WithGroup(name string) slog.Handler {
+	newHandler := *h
+	newHandler.groups = append(newHandler.groups, name)
+	return &newHandler
+}
+
+// Add replaces the current handler with a new one
 func Add(handler slog.Handler) {
-	defaultLogger = slog.New(handler)
+	defaultHandler = handler
+	defaultLogger = slog.New(defaultHandler)
 }
 
 // FileConfig represents the configuration for file logging.
@@ -193,13 +250,25 @@ func (h *RotatingFileHandler) rotate() error {
 	return nil
 }
 
-// AddRotatingFile adds a rotating file handler to the logger.
+// AddRotatingFile adds a rotating file handler to the logger
 func AddRotatingFile(config FileConfig) error {
 	handler, err := NewRotatingFileHandler(config)
 	if err != nil {
 		return err
 	}
-	Add(handler)
+
+	var newHandler slog.Handler
+	if mh, ok := defaultHandler.(*MultiHandler); ok {
+		// If defaultHandler is already a MultiHandler, add the new handler to it
+		newHandlers := append(mh.handlers, handler)
+		newHandler = NewMultiHandler(newHandlers...)
+	} else {
+		// If not, create a new MultiHandler with both handlers
+		newHandler = NewMultiHandler(defaultHandler, handler)
+	}
+
+	defaultHandler = newHandler
+	defaultLogger = slog.New(defaultHandler)
 	return nil
 }
 
@@ -208,4 +277,52 @@ func Catch(f func() error) {
 	if err := f(); err != nil {
 		Error("Caught error", "error", err)
 	}
+}
+
+// MultiHandler implements a multi-handler that writes to multiple handlers.
+type MultiHandler struct {
+	handlers []slog.Handler
+}
+
+// NewMultiHandler creates a new MultiHandler.
+func NewMultiHandler(handlers ...slog.Handler) *MultiHandler {
+	return &MultiHandler{handlers: handlers}
+}
+
+// Enabled implements the slog.Handler interface.
+func (h *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+// Handle implements the slog.Handler interface.
+func (h *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, handler := range h.handlers {
+		if err := handler.Handle(ctx, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WithAttrs implements the slog.Handler interface.
+func (h *MultiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		handlers[i] = handler.WithAttrs(attrs)
+	}
+	return NewMultiHandler(handlers...)
+}
+
+// WithGroup implements the slog.Handler interface.
+func (h *MultiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		handlers[i] = handler.WithGroup(name)
+	}
+	return NewMultiHandler(handlers...)
 }
