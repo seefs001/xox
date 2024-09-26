@@ -44,7 +44,7 @@ type LoggerConfig struct {
 func Logger(config ...LoggerConfig) Middleware {
 	cfg := LoggerConfig{
 		Next:         nil,
-		Format:       "[${time}] ${status} - ${latency} ${method} ${path}${query} ${ip} ${user_agent} ${body_size}\n",
+		Format:       "[${time}] ${status} - ${latency} ${method} ${path}?${query} ${ip} ${user_agent} ${body_size}\n",
 		TimeFormat:   "2006-01-02 15:04:05",
 		TimeZone:     "Local",
 		TimeInterval: 500 * time.Millisecond,
