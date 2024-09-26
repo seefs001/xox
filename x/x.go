@@ -3,9 +3,11 @@ package x
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -789,6 +791,21 @@ func (wg *WaitGroup) Go(f func() error) {
 	}()
 }
 
+// WaitWithTimeout waits for all goroutines to complete or the timeout to expire
+func (wg *WaitGroup) WaitWithTimeout(timeout time.Duration) (error, bool) {
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		wg.wg.Wait()
+	}()
+	select {
+	case <-c:
+		return wg.Wait(), false
+	case <-time.After(timeout):
+		return nil, true
+	}
+}
+
 // GoWithContext runs the given function in a new goroutine with context support and adds it to the WaitGroup
 func (wg *WaitGroup) GoWithContext(ctx context.Context, f func(context.Context) error) {
 	wg.wg.Add(1)
@@ -821,22 +838,175 @@ func (wg *WaitGroup) Wait() error {
 	return nil
 }
 
-// WaitWithTimeout waits for all goroutines to complete or the timeout to expire
-func (wg *WaitGroup) WaitWithTimeout(timeout time.Duration) (error, bool) {
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		wg.wg.Wait()
-	}()
-	select {
-	case <-c:
-		return wg.Wait(), true
-	case <-time.After(timeout):
-		return nil, false
-	}
-}
-
 // NewWaitGroup creates a new WaitGroup
 func NewWaitGroup() *WaitGroup {
 	return &WaitGroup{}
+}
+
+// ToJSON converts a struct or map to a JSON string
+func ToJSON(v interface{}) (string, error) {
+	jsonBytes, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+	return string(jsonBytes), nil
+}
+
+// MustToJSON converts a struct or map to a JSON string, panicking on error
+func MustToJSON(v interface{}) string {
+	jsonStr, err := ToJSON(v)
+	if err != nil {
+		panic(err)
+	}
+	return jsonStr
+}
+
+// Ternary is a generic function that implements the ternary operator
+func Ternary[T any](condition bool, ifTrue, ifFalse T) T {
+	if condition {
+		return ifTrue
+	}
+	return ifFalse
+}
+
+// TernaryF is a generic function that implements the ternary operator with lazy evaluation
+func TernaryF[T any](condition bool, ifTrue, ifFalse func() T) T {
+	if condition {
+		return ifTrue()
+	}
+	return ifFalse()
+}
+
+// If is a generic function that implements an if-else chain
+func If[T any](condition bool, then T) *ifChain[T] {
+	if condition {
+		return &ifChain[T]{result: then, done: true}
+	}
+	return &ifChain[T]{}
+}
+
+type ifChain[T any] struct {
+	result T
+	done   bool
+}
+
+func (ic *ifChain[T]) ElseIf(condition bool, then T) *ifChain[T] {
+	if !ic.done && condition {
+		ic.result = then
+		ic.done = true
+	}
+	return ic
+}
+
+func (ic *ifChain[T]) Else(otherwise T) T {
+	if !ic.done {
+		return otherwise
+	}
+	return ic.result
+}
+
+// Switch is a generic function that implements a switch statement
+func Switch[T comparable, R any](value T) *switchChain[T, R] {
+	return &switchChain[T, R]{value: value}
+}
+
+type switchChain[T comparable, R any] struct {
+	value  T
+	result R
+	done   bool
+}
+
+func (sc *switchChain[T, R]) Case(caseValue T, result R) *switchChain[T, R] {
+	if !sc.done && sc.value == caseValue {
+		sc.result = result
+		sc.done = true
+	}
+	return sc
+}
+
+func (sc *switchChain[T, R]) Default(defaultResult R) R {
+	if !sc.done {
+		return defaultResult
+	}
+	return sc.result
+}
+
+// IsEmpty checks if a value is considered empty
+func IsEmpty[T any](value T) bool {
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Array:
+		return v.Len() == 0
+	case reflect.Ptr:
+		return v.IsNil()
+	case reflect.Interface:
+		return v.IsNil() || IsEmpty(v.Elem().Interface())
+	case reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Complex64, reflect.Complex128:
+		return v.Complex() == 0
+	}
+	return false
+}
+
+// IsNil checks if a value is nil
+func IsNil(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.UnsafePointer, reflect.Interface, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
+}
+
+// IsZero checks if a value is the zero value for its type
+func IsZero[T any](value T) bool {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return true
+	}
+	switch v.Kind() {
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Complex64, reflect.Complex128:
+		return v.Complex() == 0
+	case reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if !IsZero(v.Index(i).Interface()) {
+				return false
+			}
+		}
+		return true
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	case reflect.String:
+		return v.Len() == 0
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !IsZero(v.Field(i).Interface()) {
+				return false
+			}
+		}
+		return true
+	case reflect.UnsafePointer:
+		return v.Pointer() == 0
+	}
+	return false
 }

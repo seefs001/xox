@@ -10,7 +10,11 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/seefs001/xox/xlog"
 )
 
 // Client is a high-performance HTTP client with sensible defaults and advanced features
@@ -19,6 +23,16 @@ type Client struct {
 	retryCount int
 	maxBackoff time.Duration
 	userAgent  string
+	debug      bool
+	logOptions LogOptions
+}
+
+// LogOptions contains configuration for debug logging
+type LogOptions struct {
+	LogHeaders     bool
+	LogBody        bool
+	LogResponse    bool
+	MaxBodyLogSize int
 }
 
 // ClientOption allows customizing the Client
@@ -43,6 +57,13 @@ func NewClient(options ...ClientOption) *Client {
 		retryCount: 3,
 		maxBackoff: 30 * time.Second,
 		userAgent:  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		debug:      false,
+		logOptions: LogOptions{
+			LogHeaders:     false,
+			LogBody:        true,
+			LogResponse:    true,
+			MaxBodyLogSize: 1024, // Default to 1KB
+		},
 	}
 
 	for _, option := range options {
@@ -80,6 +101,55 @@ func WithUserAgent(userAgent string) ClientOption {
 	}
 }
 
+// WithHTTPProxy sets an HTTP proxy for the client
+func WithHTTPProxy(proxyURL string) ClientOption {
+	return func(c *Client) {
+		proxy, err := url.Parse(proxyURL)
+		if err != nil {
+			// Handle error (e.g., log it)
+			return
+		}
+		transport, ok := c.client.Transport.(*http.Transport)
+		if !ok {
+			transport = &http.Transport{}
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+		c.client.Transport = transport
+	}
+}
+
+// WithSOCKS5Proxy sets a SOCKS5 proxy for the client
+func WithSOCKS5Proxy(proxyAddr string) ClientOption {
+	return func(c *Client) {
+		transport, ok := c.client.Transport.(*http.Transport)
+		if !ok {
+			transport = &http.Transport{}
+		}
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}
+			return dialer.DialContext(ctx, "tcp", proxyAddr)
+		}
+		c.client.Transport = transport
+	}
+}
+
+// WithDebug enables or disables debug mode
+func WithDebug(debug bool) ClientOption {
+	return func(c *Client) {
+		c.debug = debug
+	}
+}
+
+// WithLogOptions sets the logging options for debug mode
+func WithLogOptions(options LogOptions) ClientOption {
+	return func(c *Client) {
+		c.logOptions = options
+	}
+}
+
 // Get performs a GET request
 func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 	return c.doRequest(ctx, http.MethodGet, url, nil)
@@ -100,23 +170,38 @@ func (c *Client) Delete(ctx context.Context, url string) (*http.Response, error)
 	return c.doRequest(ctx, http.MethodDelete, url, nil)
 }
 
-func (c *Client) doRequest(ctx context.Context, method, url string, body interface{}) (*http.Response, error) {
+func (c *Client) doRequest(ctx context.Context, method, reqURL string, body interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
+	var contentType string
+
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		switch v := body.(type) {
+		case url.Values:
+			bodyReader = strings.NewReader(v.Encode())
+			contentType = "application/x-www-form-urlencoded"
+		default:
+			jsonBody, err := json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal request body: %w", err)
+			}
+			bodyReader = bytes.NewReader(jsonBody)
+			contentType = "application/json"
 		}
-		bodyReader = bytes.NewReader(jsonBody)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	req.Header.Set("User-Agent", c.userAgent)
+
+	if c.debug {
+		c.logRequest(req)
+	}
 
 	var resp *http.Response
 	operation := func() error {
@@ -134,6 +219,10 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body interfa
 	err = c.retryWithBackoff(ctx, operation)
 	if err != nil {
 		return nil, err
+	}
+
+	if c.debug && c.logOptions.LogResponse {
+		c.logResponse(resp)
 	}
 
 	return resp, nil
@@ -193,4 +282,48 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set(k, v)
 	}
 	return t.base.RoundTrip(req)
+}
+
+func (c *Client) logRequest(req *http.Request) {
+	xlog.Info("HTTP Request", "method", req.Method, "url", req.URL.String())
+
+	if c.logOptions.LogHeaders {
+		for key, values := range req.Header {
+			for _, value := range values {
+				xlog.Info("Request Header", "key", key, "value", value)
+			}
+		}
+	}
+
+	if c.logOptions.LogBody && req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		req.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+		if len(body) > c.logOptions.MaxBodyLogSize {
+			xlog.Info("Request Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+		} else {
+			xlog.Info("Request Body", "body", string(body))
+		}
+	}
+}
+
+func (c *Client) logResponse(resp *http.Response) {
+	xlog.Info("HTTP Response", "status", resp.Status)
+
+	if c.logOptions.LogHeaders {
+		for key, values := range resp.Header {
+			for _, value := range values {
+				xlog.Info("Response Header", "key", key, "value", value)
+			}
+		}
+	}
+
+	if c.logOptions.LogBody && resp.Body != nil {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+		if len(body) > c.logOptions.MaxBodyLogSize {
+			xlog.Info("Response Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+		} else {
+			xlog.Info("Response Body", "body", string(body))
+		}
+	}
 }
