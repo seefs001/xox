@@ -3,6 +3,7 @@ package xmw
 import (
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -35,23 +36,49 @@ type LoggerConfig struct {
 	TimeInterval time.Duration
 	Output       io.Writer
 	ExcludePaths []string
-	UseColor     bool // Add UseColor field to support optional coloring
+	UseColor     bool
+	LogHandler   func(msg string, attrs map[string]interface{}) // Updated LogHandler signature
 }
 
 // Logger returns a middleware that logs HTTP requests/responses.
 func Logger(config ...LoggerConfig) Middleware {
 	cfg := LoggerConfig{
 		Next:         nil,
-		Format:       "[${time}] ${status} - ${latency} ${method} ${path}\n",
-		TimeFormat:   "15:04:05",
+		Format:       "[${time}] ${status} - ${latency} ${method} ${path}${query} ${ip} ${user_agent} ${body_size}\n",
+		TimeFormat:   "2006-01-02 15:04:05",
 		TimeZone:     "Local",
 		TimeInterval: 500 * time.Millisecond,
 		Output:       os.Stdout,
-		UseColor:     true, // Default to no color
+		UseColor:     true,
+		LogHandler:   nil, // Default to nil
 	}
 
 	if len(config) > 0 {
-		cfg = config[0]
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].Format != "" {
+			cfg.Format = config[0].Format
+		}
+		if config[0].TimeFormat != "" {
+			cfg.TimeFormat = config[0].TimeFormat
+		}
+		if config[0].TimeZone != "" {
+			cfg.TimeZone = config[0].TimeZone
+		}
+		if config[0].TimeInterval != 0 {
+			cfg.TimeInterval = config[0].TimeInterval
+		}
+		if config[0].Output != nil {
+			cfg.Output = config[0].Output
+		}
+		if len(config[0].ExcludePaths) > 0 {
+			cfg.ExcludePaths = config[0].ExcludePaths
+		}
+		cfg.UseColor = config[0].UseColor
+		if config[0].LogHandler != nil {
+			cfg.LogHandler = config[0].LogHandler
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -72,25 +99,53 @@ func Logger(config ...LoggerConfig) Middleware {
 				}
 			}
 
-			log := strings.Replace(cfg.Format, "${time}", time.Now().Format(cfg.TimeFormat), 1)
-			if cfg.UseColor {
-				statusColor := "\x1b[32m" // Green for 2xx
-				if ww.statusCode >= 300 && ww.statusCode < 400 {
-					statusColor = "\x1b[33m" // Yellow for 3xx
-				} else if ww.statusCode >= 400 {
-					statusColor = "\x1b[31m" // Red for 4xx and 5xx
-				}
-				log = strings.Replace(log, "${status}", statusColor+strconv.Itoa(ww.statusCode)+"\x1b[0m", 1)
-				log = strings.Replace(log, "${latency}", "\x1b[36m"+duration.String()+"\x1b[0m", 1)
-				log = strings.Replace(log, "${method}", "\x1b[34m"+r.Method+"\x1b[0m", 1)
-			} else {
-				log = strings.Replace(log, "${status}", strconv.Itoa(ww.statusCode), 1)
-				log = strings.Replace(log, "${latency}", duration.String(), 1)
-				log = strings.Replace(log, "${method}", r.Method, 1)
-			}
-			log = strings.Replace(log, "${path}", r.URL.Path, 1)
+			attrs := make(map[string]interface{})
+			attrs["time"] = time.Now().Format(cfg.TimeFormat)
+			attrs["ip"] = r.RemoteAddr
+			attrs["user_agent"] = r.UserAgent()
+			attrs["query"] = r.URL.RawQuery
+			attrs["body_size"] = r.ContentLength
+			attrs["status"] = ww.statusCode
+			attrs["latency"] = duration
+			attrs["method"] = r.Method
+			attrs["path"] = r.URL.Path
 
-			_, _ = cfg.Output.Write([]byte(log))
+			log := cfg.Format
+			for key, value := range attrs {
+				placeholder := "${" + key + "}"
+				stringValue := fmt.Sprintf("%v", value)
+				if cfg.UseColor {
+					switch key {
+					case "status":
+						statusColor := "\x1b[32m" // Green for 2xx
+						if ww.statusCode >= 300 && ww.statusCode < 400 {
+							statusColor = "\x1b[33m" // Yellow for 3xx
+						} else if ww.statusCode >= 400 {
+							statusColor = "\x1b[31m" // Red for 4xx and 5xx
+						}
+						stringValue = statusColor + stringValue + "\x1b[0m"
+					case "latency":
+						stringValue = "\x1b[36m" + stringValue + "\x1b[0m"
+					case "method":
+						stringValue = "\x1b[34m" + stringValue + "\x1b[0m"
+					case "path":
+						stringValue = "\x1b[35m" + stringValue + "\x1b[0m"
+					}
+				}
+				log = strings.Replace(log, placeholder, stringValue, 1)
+			}
+
+			if attrs["query"] != "" {
+				log = strings.Replace(log, "${query}", "?"+attrs["query"].(string), 1)
+			} else {
+				log = strings.Replace(log, "${query}", "", 1)
+			}
+
+			if cfg.LogHandler != nil {
+				cfg.LogHandler(log, attrs)
+			} else {
+				_, _ = cfg.Output.Write([]byte(log))
+			}
 		})
 	}
 }
@@ -111,7 +166,15 @@ func Recover(config ...RecoverConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		cfg = config[0]
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].EnableStackTrace {
+			cfg.EnableStackTrace = config[0].EnableStackTrace
+		}
+		if config[0].StackTraceHandler != nil {
+			cfg.StackTraceHandler = config[0].StackTraceHandler
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -142,15 +205,33 @@ type TimeoutConfig struct {
 }
 
 // Timeout wraps a handler in a timeout.
-func Timeout(config TimeoutConfig) Middleware {
+func Timeout(config ...TimeoutConfig) Middleware {
+	cfg := TimeoutConfig{
+		Next:           nil,
+		Timeout:        30 * time.Second,
+		TimeoutHandler: nil,
+	}
+
+	if len(config) > 0 {
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].Timeout != 0 {
+			cfg.Timeout = config[0].Timeout
+		}
+		if config[0].TimeoutHandler != nil {
+			cfg.TimeoutHandler = config[0].TimeoutHandler
+		}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if config.Next != nil && config.Next(r) {
+			if cfg.Next != nil && cfg.Next(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			ctx, cancel := context.WithTimeout(r.Context(), config.Timeout)
+			ctx, cancel := context.WithTimeout(r.Context(), cfg.Timeout)
 			defer cancel()
 
 			done := make(chan bool)
@@ -163,8 +244,8 @@ func Timeout(config TimeoutConfig) Middleware {
 			case <-done:
 				return
 			case <-ctx.Done():
-				if config.TimeoutHandler != nil {
-					config.TimeoutHandler(w, r)
+				if cfg.TimeoutHandler != nil {
+					cfg.TimeoutHandler(w, r)
 				} else {
 					xlog.Warn("Request timed out", "uri", r.RequestURI)
 					http.Error(w, "Request timed out", http.StatusGatewayTimeout)
@@ -194,7 +275,27 @@ func CORS(config ...CORSConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		cfg = config[0]
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if len(config[0].AllowOrigins) > 0 {
+			cfg.AllowOrigins = config[0].AllowOrigins
+		}
+		if len(config[0].AllowMethods) > 0 {
+			cfg.AllowMethods = config[0].AllowMethods
+		}
+		if len(config[0].AllowHeaders) > 0 {
+			cfg.AllowHeaders = config[0].AllowHeaders
+		}
+		if config[0].AllowCredentials {
+			cfg.AllowCredentials = config[0].AllowCredentials
+		}
+		if len(config[0].ExposeHeaders) > 0 {
+			cfg.ExposeHeaders = config[0].ExposeHeaders
+		}
+		if config[0].MaxAge > 0 {
+			cfg.MaxAge = config[0].MaxAge
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -256,7 +357,15 @@ func Compress(config ...CompressConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		cfg = config[0]
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].Level != 0 {
+			cfg.Level = config[0].Level
+		}
+		if config[0].MinSize > 0 {
+			cfg.MinSize = config[0].MinSize
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -304,7 +413,18 @@ func RateLimit(config ...RateLimitConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		cfg = config[0]
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].Max > 0 {
+			cfg.Max = config[0].Max
+		}
+		if config[0].Duration > 0 {
+			cfg.Duration = config[0].Duration
+		}
+		if config[0].KeyFunc != nil {
+			cfg.KeyFunc = config[0].KeyFunc
+		}
 	}
 
 	type limiter struct {
@@ -362,27 +482,49 @@ type BasicAuthConfig struct {
 }
 
 // BasicAuth returns a middleware that performs basic authentication
-func BasicAuth(config BasicAuthConfig) Middleware {
+func BasicAuth(config ...BasicAuthConfig) Middleware {
+	cfg := BasicAuthConfig{
+		Next:     nil,
+		Users:    make(map[string]string),
+		Realm:    "Restricted",
+		AuthFunc: nil,
+	}
+
+	if len(config) > 0 {
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if len(config[0].Users) > 0 {
+			cfg.Users = config[0].Users
+		}
+		if config[0].Realm != "" {
+			cfg.Realm = config[0].Realm
+		}
+		if config[0].AuthFunc != nil {
+			cfg.AuthFunc = config[0].AuthFunc
+		}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if config.Next != nil && config.Next(r) {
+			if cfg.Next != nil && cfg.Next(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			user, pass, ok := r.BasicAuth()
 			if !ok {
-				w.Header().Set("WWW-Authenticate", `Basic realm="`+config.Realm+`"`)
+				w.Header().Set("WWW-Authenticate", `Basic realm="`+cfg.Realm+`"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			if config.AuthFunc != nil {
-				if !config.AuthFunc(user, pass) {
+			if cfg.AuthFunc != nil {
+				if !cfg.AuthFunc(user, pass) {
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
-			} else if storedPass, ok := config.Users[user]; !ok || storedPass != pass {
+			} else if storedPass, ok := cfg.Users[user]; !ok || storedPass != pass {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}

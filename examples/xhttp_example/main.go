@@ -130,7 +130,6 @@ func main() {
 	// Define middleware stack
 	middlewareStack := []xmw.Middleware{
 		xmw.Logger(xmw.LoggerConfig{
-			Format:   "${method} ${path} - ${status} - ${latency}\n",
 			Output:   log.Writer(),
 			UseColor: true,
 		}),
