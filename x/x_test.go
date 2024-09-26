@@ -16,15 +16,10 @@ import (
 
 func TestMustFunctions(t *testing.T) {
 	t.Run("Must0", func(t *testing.T) {
-		result := x.Must0(func() (int, error) {
-			return 42, nil
-		})
-		assert.Equal(t, 42, result)
+		x.Must0(nil) // Should not panic
 
 		assert.Panics(t, func() {
-			x.Must0(func() (int, error) {
-				return 0, errors.New("test error")
-			})
+			x.Must0(errors.New("test error"))
 		})
 	})
 
@@ -73,10 +68,8 @@ func TestMustFunctions(t *testing.T) {
 
 func TestIgnoreFunctions(t *testing.T) {
 	t.Run("Ignore0", func(t *testing.T) {
-		result := x.Ignore0(func() (int, error) {
-			return 42, errors.New("ignored error")
-		})
-		assert.Equal(t, 42, result)
+		x.Ignore0(errors.New("ignored error"))
+		// No assertion needed as Ignore0 doesn't return anything
 	})
 
 	t.Run("Ignore1", func(t *testing.T) {
