@@ -53,7 +53,7 @@ type LoggerConfig struct {
 func Logger(config ...LoggerConfig) Middleware {
 	cfg := LoggerConfig{
 		Next:         nil,
-		Format:       "[${time}] ${status} - ${latency} ${method} ${path}?${query} ${ip} ${user_agent} ${body_size}\n",
+		Format:       "[${time}] ${status} - ${latency} ${method} ${path} ${query} ${ip} ${user_agent} ${body_size}\n",
 		TimeFormat:   "2006-01-02 15:04:05",
 		TimeZone:     "Local",
 		TimeInterval: 500 * time.Millisecond,
@@ -600,6 +600,9 @@ func (m *MemoryStore) Delete(sessionID string) error {
 	return nil
 }
 
+// DefaultSessionName is the default name for the session in the context
+const DefaultSessionName = "ctx_session"
+
 // SessionConfig defines the config for Session middleware
 type SessionConfig struct {
 	Next        func(c *http.Request) bool
@@ -609,6 +612,68 @@ type SessionConfig struct {
 	SessionName string
 }
 
+// SessionManager handles session operations
+type SessionManager struct {
+	store       SessionStore
+	cookieName  string
+	maxAge      int
+	sessionName string
+}
+
+// NewSessionManager creates a new SessionManager
+func NewSessionManager(store SessionStore, cookieName string, maxAge int, sessionName string) *SessionManager {
+	return &SessionManager{
+		store:       store,
+		cookieName:  cookieName,
+		maxAge:      maxAge,
+		sessionName: sessionName,
+	}
+}
+
+// Get retrieves a value from the session
+func (sm *SessionManager) Get(r *http.Request, key string) (interface{}, bool) {
+	session := sm.getSession(r)
+	if session == nil {
+		return nil, false
+	}
+	value, ok := session[key]
+	return value, ok
+}
+
+// Set sets a value in the session
+func (sm *SessionManager) Set(r *http.Request, key string, value interface{}) {
+	session := sm.getSession(r)
+	if session != nil {
+		session[key] = value
+	}
+}
+
+// Delete removes a value from the session
+func (sm *SessionManager) Delete(r *http.Request, key string) {
+	session := sm.getSession(r)
+	if session != nil {
+		delete(session, key)
+	}
+}
+
+// Clear removes all values from the session
+func (sm *SessionManager) Clear(r *http.Request) {
+	session := sm.getSession(r)
+	if session != nil {
+		for key := range session {
+			delete(session, key)
+		}
+	}
+}
+
+// getSession retrieves the session from the request context
+func (sm *SessionManager) getSession(r *http.Request) map[string]interface{} {
+	if session, ok := r.Context().Value(sm.sessionName).(map[string]interface{}); ok {
+		return session
+	}
+	return nil
+}
+
 // Session returns a middleware that handles session management
 func Session(config ...SessionConfig) Middleware {
 	cfg := SessionConfig{
@@ -616,7 +681,7 @@ func Session(config ...SessionConfig) Middleware {
 		Store:       NewMemoryStore(),
 		CookieName:  "session_id",
 		MaxAge:      86400, // 1 day
-		SessionName: "session",
+		SessionName: DefaultSessionName,
 	}
 
 	if len(config) > 0 {
@@ -636,6 +701,8 @@ func Session(config ...SessionConfig) Middleware {
 			cfg.SessionName = config[0].SessionName
 		}
 	}
+
+	sessionManager := NewSessionManager(cfg.Store, cfg.CookieName, cfg.MaxAge, cfg.SessionName)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -665,6 +732,7 @@ func Session(config ...SessionConfig) Middleware {
 			}
 
 			ctx := context.WithValue(r.Context(), cfg.SessionName, session)
+			ctx = context.WithValue(ctx, "sessionManager", sessionManager)
 			r = r.WithContext(ctx)
 
 			next.ServeHTTP(w, r)
@@ -678,10 +746,10 @@ func generateSessionID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// GetSession retrieves the session from the request context
-func GetSession(r *http.Request, sessionName string) map[string]interface{} {
-	if session, ok := r.Context().Value(sessionName).(map[string]interface{}); ok {
-		return session
+// GetSessionManager retrieves the SessionManager from the request context
+func GetSessionManager(r *http.Request) *SessionManager {
+	if sm, ok := r.Context().Value("sessionManager").(*SessionManager); ok {
+		return sm
 	}
 	return nil
 }
