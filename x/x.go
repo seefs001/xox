@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"math/big"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -627,4 +629,219 @@ func (t *AsyncTask[T]) WaitWithContext(ctx context.Context) (T, error, bool) {
 		var zero T
 		return zero, ctx.Err(), false
 	}
+}
+
+// SafePool represents a pool of goroutines with panic recovery
+type SafePool struct {
+	workers chan struct{}
+}
+
+// NewSafePool creates a new SafePool with the specified number of workers
+// If size is 0 or negative, it creates an unbounded pool
+func NewSafePool(size int) *SafePool {
+	if size <= 0 {
+		return &SafePool{}
+	}
+	return &SafePool{
+		workers: make(chan struct{}, size),
+	}
+}
+
+// SafeGo runs the given function in a goroutine with panic recovery.
+// It returns a channel that will receive an error if a panic occurs,
+// or nil if the function completes successfully.
+func (p *SafePool) SafeGo(f func()) <-chan error {
+	errChan := make(chan error, 1)
+
+	go func() {
+		if p.workers != nil {
+			p.workers <- struct{}{}
+			defer func() { <-p.workers }()
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("panic recovered: %v", r)
+			}
+			close(errChan)
+		}()
+
+		f()
+	}()
+
+	return errChan
+}
+
+// SafeGoWithContext runs the given function in a goroutine with panic recovery and context cancellation.
+// It returns a channel that will receive an error if a panic occurs or the context is cancelled,
+// or nil if the function completes successfully.
+func (p *SafePool) SafeGoWithContext(ctx context.Context, f func()) <-chan error {
+	errChan := make(chan error, 1)
+
+	go func() {
+		if p.workers != nil {
+			p.workers <- struct{}{}
+			defer func() { <-p.workers }()
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("panic recovered: %v", r)
+			}
+			close(errChan)
+		}()
+
+		select {
+		case <-ctx.Done():
+			errChan <- ctx.Err()
+		default:
+			f()
+		}
+	}()
+
+	return errChan
+}
+
+// SafeGoNoError runs the given function in a goroutine with panic recovery.
+// It does not return any error information.
+func (p *SafePool) SafeGoNoError(f func()) {
+	go func() {
+		if p.workers != nil {
+			p.workers <- struct{}{}
+			defer func() { <-p.workers }()
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				// Log the panic instead of sending it to a channel
+				fmt.Printf("Panic recovered: %v\n", r)
+			}
+		}()
+
+		f()
+	}()
+}
+
+// SafeGoWithContextNoError runs the given function in a goroutine with panic recovery and context cancellation.
+// It does not return any error information.
+func (p *SafePool) SafeGoWithContextNoError(ctx context.Context, f func()) {
+	go func() {
+		if p.workers != nil {
+			p.workers <- struct{}{}
+			defer func() { <-p.workers }()
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				// Log the panic instead of sending it to a channel
+				fmt.Printf("Panic recovered: %v\n", r)
+			}
+		}()
+
+		select {
+		case <-ctx.Done():
+			// Log context cancellation instead of sending it to a channel
+			fmt.Printf("Context cancelled: %v\n", ctx.Err())
+		default:
+			f()
+		}
+	}()
+}
+
+// For backwards compatibility, keep the global functions
+var defaultPool = NewSafePool(0)
+
+func SafeGo(f func()) <-chan error {
+	return defaultPool.SafeGo(f)
+}
+
+func SafeGoWithContext(ctx context.Context, f func()) <-chan error {
+	return defaultPool.SafeGoWithContext(ctx, f)
+}
+
+func SafeGoNoError(f func()) {
+	defaultPool.SafeGoNoError(f)
+}
+
+func SafeGoWithContextNoError(ctx context.Context, f func()) {
+	defaultPool.SafeGoWithContextNoError(ctx, f)
+}
+
+// WaitGroup is a safer version of sync.WaitGroup with panic recovery and error handling
+type WaitGroup struct {
+	wg     sync.WaitGroup
+	errMu  sync.Mutex
+	errors []error
+}
+
+// Go runs the given function in a new goroutine and adds it to the WaitGroup
+func (wg *WaitGroup) Go(f func() error) {
+	wg.wg.Add(1)
+	go func() {
+		defer wg.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				wg.errMu.Lock()
+				wg.errors = append(wg.errors, fmt.Errorf("panic recovered: %v\n%s", r, debug.Stack()))
+				wg.errMu.Unlock()
+			}
+		}()
+		if err := f(); err != nil {
+			wg.errMu.Lock()
+			wg.errors = append(wg.errors, err)
+			wg.errMu.Unlock()
+		}
+	}()
+}
+
+// GoWithContext runs the given function in a new goroutine with context support and adds it to the WaitGroup
+func (wg *WaitGroup) GoWithContext(ctx context.Context, f func(context.Context) error) {
+	wg.wg.Add(1)
+	go func() {
+		defer wg.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				wg.errMu.Lock()
+				wg.errors = append(wg.errors, fmt.Errorf("panic recovered: %v\n%s", r, debug.Stack()))
+				wg.errMu.Unlock()
+			}
+		}()
+		if err := f(ctx); err != nil {
+			wg.errMu.Lock()
+			wg.errors = append(wg.errors, err)
+			wg.errMu.Unlock()
+		}
+	}()
+}
+
+// Wait waits for all goroutines to complete and returns any errors that occurred
+func (wg *WaitGroup) Wait() error {
+	wg.wg.Wait()
+	if len(wg.errors) == 1 {
+		return wg.errors[0]
+	}
+	if len(wg.errors) > 1 {
+		return fmt.Errorf("multiple errors occurred: %v", wg.errors)
+	}
+	return nil
+}
+
+// WaitWithTimeout waits for all goroutines to complete or the timeout to expire
+func (wg *WaitGroup) WaitWithTimeout(timeout time.Duration) (error, bool) {
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		wg.wg.Wait()
+	}()
+	select {
+	case <-c:
+		return wg.Wait(), true
+	case <-time.After(timeout):
+		return nil, false
+	}
+}
+
+// NewWaitGroup creates a new WaitGroup
+func NewWaitGroup() *WaitGroup {
+	return &WaitGroup{}
 }

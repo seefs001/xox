@@ -580,3 +580,251 @@ func isUppercase(s string) bool {
 	}
 	return true
 }
+
+func TestSafePool(t *testing.T) {
+	t.Run("Bounded pool", func(t *testing.T) {
+		pool := x.NewSafePool(2)
+		var wg sync.WaitGroup
+		wg.Add(3)
+
+		start := time.Now()
+		for i := 0; i < 3; i++ {
+			pool.SafeGoNoError(func() {
+				time.Sleep(100 * time.Millisecond)
+				wg.Done()
+			})
+		}
+		wg.Wait()
+		duration := time.Since(start)
+
+		assert.True(t, duration >= 190*time.Millisecond && duration < 210*time.Millisecond)
+	})
+
+	t.Run("Unbounded pool", func(t *testing.T) {
+		pool := x.NewSafePool(0)
+		var wg sync.WaitGroup
+		wg.Add(3)
+
+		start := time.Now()
+		for i := 0; i < 3; i++ {
+			pool.SafeGoNoError(func() {
+				time.Sleep(100 * time.Millisecond)
+				wg.Done()
+			})
+		}
+		wg.Wait()
+		duration := time.Since(start)
+
+		assert.True(t, duration >= 90*time.Millisecond && duration < 110*time.Millisecond)
+	})
+}
+
+func TestSafeGo(t *testing.T) {
+	pool := x.NewSafePool(0)
+
+	// Test normal execution
+	errChan := pool.SafeGo(func() {
+		// Do nothing
+	})
+
+	select {
+	case err := <-errChan:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGo to complete")
+	}
+
+	// Test panic recovery
+	errChan = pool.SafeGo(func() {
+		panic("test panic")
+	})
+
+	select {
+	case err := <-errChan:
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "panic recovered: test panic")
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGo to complete")
+	}
+}
+
+func TestSafeGoWithContext(t *testing.T) {
+	pool := x.NewSafePool(0)
+
+	// Test normal execution
+	ctx := context.Background()
+	errChan := pool.SafeGoWithContext(ctx, func() {
+		// Do nothing
+	})
+
+	select {
+	case err := <-errChan:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGoWithContext to complete")
+	}
+
+	// Test panic recovery
+	errChan = pool.SafeGoWithContext(ctx, func() {
+		panic("test panic")
+	})
+
+	select {
+	case err := <-errChan:
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "panic recovered: test panic")
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGoWithContext to complete")
+	}
+
+	// Test context cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	errChan = pool.SafeGoWithContext(ctx, func() {
+		time.Sleep(time.Second)
+	})
+	cancel()
+
+	select {
+	case err := <-errChan:
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Error("Timeout waiting for SafeGoWithContext to complete")
+	}
+}
+
+func TestSafeGoNoError(t *testing.T) {
+	pool := x.NewSafePool(0)
+
+	// Test normal execution
+	done := make(chan bool)
+	pool.SafeGoNoError(func() {
+		done <- true
+	})
+
+	select {
+	case <-done:
+		// Test passed
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGoNoError to complete")
+	}
+
+	// Test panic recovery (no error channel, so we can't check the error)
+	pool.SafeGoNoError(func() {
+		panic("test panic")
+	})
+
+	// Wait a bit to ensure the panic doesn't crash the program
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestSafeGoWithContextNoError(t *testing.T) {
+	pool := x.NewSafePool(0)
+
+	// Test normal execution
+	ctx := context.Background()
+	done := make(chan bool)
+	pool.SafeGoWithContextNoError(ctx, func() {
+		done <- true
+	})
+
+	select {
+	case <-done:
+		// Test passed
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for SafeGoWithContextNoError to complete")
+	}
+
+	// Test panic recovery (no error channel, so we can't check the error)
+	pool.SafeGoWithContextNoError(ctx, func() {
+		panic("test panic")
+	})
+
+	// Wait a bit to ensure the panic doesn't crash the program
+	time.Sleep(100 * time.Millisecond)
+
+	// Test context cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+	pool.SafeGoWithContextNoError(ctx, func() {
+		t.Error("This should not be executed")
+	})
+
+	// Wait a bit to ensure the cancelled context prevents execution
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestWaitGroup(t *testing.T) {
+	t.Run("Basic functionality", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		counter := 0
+		for i := 0; i < 5; i++ {
+			wg.Go(func() error {
+				counter++
+				return nil
+			})
+		}
+		err := wg.Wait()
+		assert.NoError(t, err)
+		assert.Equal(t, 5, counter)
+	})
+
+	t.Run("Error handling", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		wg.Go(func() error {
+			return errors.New("test error 1")
+		})
+		wg.Go(func() error {
+			return errors.New("test error 2")
+		})
+		err := wg.Wait()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "test error 1")
+		assert.Contains(t, err.Error(), "test error 2")
+	})
+
+	t.Run("Panic recovery", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		wg.Go(func() error {
+			panic("test panic")
+		})
+		err := wg.Wait()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "panic recovered: test panic")
+	})
+
+	t.Run("Context support", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		ctx, cancel := context.WithCancel(context.Background())
+		wg.GoWithContext(ctx, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		cancel()
+		err := wg.Wait()
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("Wait with timeout", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		wg.Go(func() error {
+			time.Sleep(200 * time.Millisecond)
+			return nil
+		})
+		err, timedOut := wg.WaitWithTimeout(100 * time.Millisecond)
+		assert.True(t, timedOut)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Wait with timeout - success", func(t *testing.T) {
+		wg := x.NewWaitGroup()
+		wg.Go(func() error {
+			time.Sleep(50 * time.Millisecond)
+			return nil
+		})
+		err, timedOut := wg.WaitWithTimeout(100 * time.Millisecond)
+		assert.False(t, timedOut)
+		assert.NoError(t, err)
+	})
+}
