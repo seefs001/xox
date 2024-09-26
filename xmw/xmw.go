@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seefs001/xox/xlog"
+	"github.com/seefs001/xox/xcolor"
 )
 
 // Middleware defines the signature for middleware functions
@@ -27,6 +27,15 @@ func Use(handler http.Handler, middlewares ...Middleware) http.Handler {
 	return handler
 }
 
+var DefaultMiddlewareSet = []Middleware{
+	Logger(),
+	Recover(),
+	Timeout(),
+	CORS(),
+	Compress(),
+	Session(),
+}
+
 // LoggerConfig defines the config for Logger middleware
 type LoggerConfig struct {
 	Next         func(c *http.Request) bool
@@ -37,7 +46,7 @@ type LoggerConfig struct {
 	Output       io.Writer
 	ExcludePaths []string
 	UseColor     bool
-	LogHandler   func(msg string, attrs map[string]interface{}) // Updated LogHandler signature
+	LogHandler   func(msg string, attrs map[string]interface{})
 }
 
 // Logger returns a middleware that logs HTTP requests/responses.
@@ -50,7 +59,7 @@ func Logger(config ...LoggerConfig) Middleware {
 		TimeInterval: 500 * time.Millisecond,
 		Output:       os.Stdout,
 		UseColor:     true,
-		LogHandler:   nil, // Default to nil
+		LogHandler:   nil,
 	}
 
 	if len(config) > 0 {
@@ -114,22 +123,22 @@ func Logger(config ...LoggerConfig) Middleware {
 			for key, value := range attrs {
 				placeholder := "${" + key + "}"
 				stringValue := fmt.Sprintf("%v", value)
-				if cfg.UseColor {
+				if cfg.UseColor && xcolor.IsColorEnabled() {
 					switch key {
 					case "status":
-						statusColor := "\x1b[32m" // Green for 2xx
+						statusColor := xcolor.Green
 						if ww.statusCode >= 300 && ww.statusCode < 400 {
-							statusColor = "\x1b[33m" // Yellow for 3xx
+							statusColor = xcolor.Yellow
 						} else if ww.statusCode >= 400 {
-							statusColor = "\x1b[31m" // Red for 4xx and 5xx
+							statusColor = xcolor.Red
 						}
-						stringValue = statusColor + stringValue + "\x1b[0m"
+						stringValue = xcolor.Sprint(statusColor, stringValue)
 					case "latency":
-						stringValue = "\x1b[36m" + stringValue + "\x1b[0m"
+						stringValue = xcolor.Sprint(xcolor.Cyan, stringValue)
 					case "method":
-						stringValue = "\x1b[34m" + stringValue + "\x1b[0m"
+						stringValue = xcolor.Sprint(xcolor.Blue, stringValue)
 					case "path":
-						stringValue = "\x1b[35m" + stringValue + "\x1b[0m"
+						stringValue = xcolor.Sprint(xcolor.Purple, stringValue)
 					}
 				}
 				log = strings.Replace(log, placeholder, stringValue, 1)
@@ -144,7 +153,11 @@ func Logger(config ...LoggerConfig) Middleware {
 			if cfg.LogHandler != nil {
 				cfg.LogHandler(log, attrs)
 			} else {
-				_, _ = cfg.Output.Write([]byte(log))
+				if cfg.UseColor {
+					xcolor.Print(xcolor.Reset, log)
+				} else {
+					_, _ = cfg.Output.Write([]byte(log))
+				}
 			}
 		})
 	}
@@ -155,6 +168,7 @@ type RecoverConfig struct {
 	Next              func(c *http.Request) bool
 	EnableStackTrace  bool
 	StackTraceHandler func(c *http.Request, e interface{})
+	ErrorLogger       func(msg string, keyvals ...interface{})
 }
 
 // Recover returns a middleware which recovers from panics anywhere in the chain
@@ -163,6 +177,7 @@ func Recover(config ...RecoverConfig) Middleware {
 		Next:              nil,
 		EnableStackTrace:  false,
 		StackTraceHandler: nil,
+		ErrorLogger:       nil,
 	}
 
 	if len(config) > 0 {
@@ -175,6 +190,9 @@ func Recover(config ...RecoverConfig) Middleware {
 		if config[0].StackTraceHandler != nil {
 			cfg.StackTraceHandler = config[0].StackTraceHandler
 		}
+		if config[0].ErrorLogger != nil {
+			cfg.ErrorLogger = config[0].ErrorLogger
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -185,8 +203,8 @@ func Recover(config ...RecoverConfig) Middleware {
 						stack := debug.Stack()
 						if cfg.StackTraceHandler != nil {
 							cfg.StackTraceHandler(r, err)
-						} else {
-							xlog.Error("Panic recovered", "error", err, "stack", string(stack))
+						} else if cfg.ErrorLogger != nil {
+							cfg.ErrorLogger("Panic recovered", "error", err, "stack", string(stack))
 						}
 					}
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -202,6 +220,7 @@ type TimeoutConfig struct {
 	Next           func(c *http.Request) bool
 	Timeout        time.Duration
 	TimeoutHandler func(w http.ResponseWriter, r *http.Request)
+	ErrorLogger    func(msg string, keyvals ...interface{})
 }
 
 // Timeout wraps a handler in a timeout.
@@ -210,6 +229,7 @@ func Timeout(config ...TimeoutConfig) Middleware {
 		Next:           nil,
 		Timeout:        30 * time.Second,
 		TimeoutHandler: nil,
+		ErrorLogger:    nil,
 	}
 
 	if len(config) > 0 {
@@ -221,6 +241,9 @@ func Timeout(config ...TimeoutConfig) Middleware {
 		}
 		if config[0].TimeoutHandler != nil {
 			cfg.TimeoutHandler = config[0].TimeoutHandler
+		}
+		if config[0].ErrorLogger != nil {
+			cfg.ErrorLogger = config[0].ErrorLogger
 		}
 	}
 
@@ -247,7 +270,9 @@ func Timeout(config ...TimeoutConfig) Middleware {
 				if cfg.TimeoutHandler != nil {
 					cfg.TimeoutHandler(w, r)
 				} else {
-					xlog.Warn("Request timed out", "uri", r.RequestURI)
+					if cfg.ErrorLogger != nil {
+						cfg.ErrorLogger("Request timed out", "uri", r.RequestURI)
+					}
 					http.Error(w, "Request timed out", http.StatusGatewayTimeout)
 				}
 			}
@@ -401,7 +426,6 @@ type RateLimitConfig struct {
 }
 
 // RateLimit returns a middleware that limits the number of requests
-// TODO: Fix this
 func RateLimit(config ...RateLimitConfig) Middleware {
 	cfg := RateLimitConfig{
 		Next:     nil,
@@ -532,6 +556,134 @@ func BasicAuth(config ...BasicAuthConfig) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// SessionStore defines the interface for session storage
+type SessionStore interface {
+	Get(sessionID string) (map[string]interface{}, error)
+	Set(sessionID string, data map[string]interface{}) error
+	Delete(sessionID string) error
+}
+
+// MemoryStore implements SessionStore using in-memory storage
+type MemoryStore struct {
+	sessions map[string]map[string]interface{}
+	mu       sync.RWMutex
+}
+
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		sessions: make(map[string]map[string]interface{}),
+	}
+}
+
+func (m *MemoryStore) Get(sessionID string) (map[string]interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if session, ok := m.sessions[sessionID]; ok {
+		return session, nil
+	}
+	return nil, fmt.Errorf("session not found")
+}
+
+func (m *MemoryStore) Set(sessionID string, data map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[sessionID] = data
+	return nil
+}
+
+func (m *MemoryStore) Delete(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, sessionID)
+	return nil
+}
+
+// SessionConfig defines the config for Session middleware
+type SessionConfig struct {
+	Next        func(c *http.Request) bool
+	Store       SessionStore
+	CookieName  string
+	MaxAge      int
+	SessionName string
+}
+
+// Session returns a middleware that handles session management
+func Session(config ...SessionConfig) Middleware {
+	cfg := SessionConfig{
+		Next:        nil,
+		Store:       NewMemoryStore(),
+		CookieName:  "session_id",
+		MaxAge:      86400, // 1 day
+		SessionName: "session",
+	}
+
+	if len(config) > 0 {
+		if config[0].Next != nil {
+			cfg.Next = config[0].Next
+		}
+		if config[0].Store != nil {
+			cfg.Store = config[0].Store
+		}
+		if config[0].CookieName != "" {
+			cfg.CookieName = config[0].CookieName
+		}
+		if config[0].MaxAge != 0 {
+			cfg.MaxAge = config[0].MaxAge
+		}
+		if config[0].SessionName != "" {
+			cfg.SessionName = config[0].SessionName
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if cfg.Next != nil && cfg.Next(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			var sessionID string
+			cookie, err := r.Cookie(cfg.CookieName)
+			if err == nil {
+				sessionID = cookie.Value
+			}
+
+			if sessionID == "" {
+				sessionID = generateSessionID()
+				http.SetCookie(w, &http.Cookie{
+					Name:   cfg.CookieName,
+					Value:  sessionID,
+					MaxAge: cfg.MaxAge,
+				})
+			}
+
+			session, err := cfg.Store.Get(sessionID)
+			if err != nil {
+				session = make(map[string]interface{})
+			}
+
+			ctx := context.WithValue(r.Context(), cfg.SessionName, session)
+			r = r.WithContext(ctx)
+
+			next.ServeHTTP(w, r)
+
+			cfg.Store.Set(sessionID, session)
+		})
+	}
+}
+
+func generateSessionID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// GetSession retrieves the session from the request context
+func GetSession(r *http.Request, sessionName string) map[string]interface{} {
+	if session, ok := r.Context().Value(sessionName).(map[string]interface{}); ok {
+		return session
+	}
+	return nil
 }
 
 // responseWriter is a wrapper for http.ResponseWriter that allows us to capture the status code
