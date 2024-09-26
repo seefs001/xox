@@ -17,6 +17,8 @@ func TestToString(t *testing.T) {
 		{nil, "", false},
 		{"hello", "hello", false},
 		{123, "123", false},
+		{int32(123), "123", false},
+		{int64(123), "123", false},
 		{123.45, "123.450000", false},
 		{true, "true", false},
 		{[]byte("hello"), "hello", false},
@@ -45,6 +47,8 @@ func TestToInt(t *testing.T) {
 		{nil, 0, false},
 		{"123", 123, false},
 		{123, 123, false},
+		{int32(123), 123, false},
+		{int64(123), 123, false},
 		{123.45, 123, true},
 		{true, 1, false},
 		{[]int{1, 2, 3}, 1, false},
@@ -53,6 +57,62 @@ func TestToInt(t *testing.T) {
 
 	for i, tt := range tests {
 		result, err := xcast.ToInt(tt.input)
+		if tt.hasError {
+			require.Errorf(t, err, "Test case %d failed: expected error but got none", i)
+		} else {
+			require.NoErrorf(t, err, "Test case %d failed: unexpected error %v", i, err)
+			assert.Equalf(t, tt.expected, result, "Test case %d failed: expected %v but got %v", i, tt.expected, result)
+		}
+	}
+}
+
+func TestToInt32(t *testing.T) {
+	tests := []struct {
+		input    any
+		expected int32
+		hasError bool
+	}{
+		{nil, 0, false},
+		{"123", 123, false},
+		{123, 123, false},
+		{int32(123), 123, false},
+		{int64(123), 123, false},
+		{123.45, 0, true},
+		{true, 1, false},
+		{[]int{1, 2, 3}, 1, false},
+		{map[string]int{"a": 1}, 0, true},
+	}
+
+	for i, tt := range tests {
+		result, err := xcast.ToInt32(tt.input)
+		if tt.hasError {
+			require.Errorf(t, err, "Test case %d failed: expected error but got none", i)
+		} else {
+			require.NoErrorf(t, err, "Test case %d failed: unexpected error %v", i, err)
+			assert.Equalf(t, tt.expected, result, "Test case %d failed: expected %v but got %v", i, tt.expected, result)
+		}
+	}
+}
+
+func TestToInt64(t *testing.T) {
+	tests := []struct {
+		input    any
+		expected int64
+		hasError bool
+	}{
+		{nil, 0, false},
+		{"123", 123, false},
+		{123, 123, false},
+		{int32(123), 123, false},
+		{int64(123), 123, false},
+		{123.45, 0, true},
+		{true, 1, false},
+		{[]int{1, 2, 3}, 1, false},
+		{map[string]int{"a": 1}, 0, true},
+	}
+
+	for i, tt := range tests {
+		result, err := xcast.ToInt64(tt.input)
 		if tt.hasError {
 			require.Errorf(t, err, "Test case %d failed: expected error but got none", i)
 		} else {
@@ -71,6 +131,8 @@ func TestToFloat64(t *testing.T) {
 		{nil, 0.0, false},
 		{"123.45", 123.45, false},
 		{123, 123.0, false},
+		{int32(123), 123.0, false},
+		{int64(123), 123.0, false},
 		{123.45, 123.45, false},
 		{true, 1.0, false},
 		{[]float64{1.23, 4.56}, 1.23, false},
@@ -97,6 +159,8 @@ func TestToBool(t *testing.T) {
 		{nil, false, false},
 		{"true", true, false},
 		{1, true, false},
+		{int32(1), true, false},
+		{int64(1), true, false},
 		{0, false, false},
 		{123.45, true, false},
 		{false, false, false},

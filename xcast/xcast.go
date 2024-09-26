@@ -59,6 +59,28 @@ func ToString(value any) (string, error) {
 
 // ToInt converts various types to an int.
 func ToInt(value any) (int, error) {
+	intVal, err := toInt64(value)
+	if err != nil {
+		return 0, err
+	}
+	return int(intVal), nil
+}
+
+// ToInt32 converts various types to an int32.
+func ToInt32(value any) (int32, error) {
+	intVal, err := toInt64(value)
+	if err != nil {
+		return 0, err
+	}
+	return int32(intVal), nil
+}
+
+// ToInt64 converts various types to an int64.
+func ToInt64(value any) (int64, error) {
+	return toInt64(value)
+}
+
+func toInt64(value any) (int64, error) {
 	if value == nil {
 		return 0, nil
 	}
@@ -73,17 +95,17 @@ func ToInt(value any) (int, error) {
 
 	switch v.Kind() {
 	case reflect.String:
-		intVal, err := strconv.Atoi(v.String())
+		intVal, err := strconv.ParseInt(v.String(), 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("cannot convert string to int: %v", err)
+			return 0, fmt.Errorf("cannot convert string to int64: %v", err)
 		}
 		return intVal, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return int(v.Int()), nil
+		return v.Int(), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return int(v.Uint()), nil
+		return int64(v.Uint()), nil
 	case reflect.Float32, reflect.Float64:
-		return 0, fmt.Errorf("float unsupported")
+		return int64(v.Float()), nil
 	case reflect.Bool:
 		if v.Bool() {
 			return 1, nil
@@ -91,18 +113,18 @@ func ToInt(value any) (int, error) {
 		return 0, nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return 0, fmt.Errorf("cannot convert byte slice to int")
+			return 0, fmt.Errorf("cannot convert byte slice to int64")
 		}
 		if v.Len() == 0 {
 			return 0, nil
 		}
-		return ToInt(v.Index(0).Interface())
+		return toInt64(v.Index(0).Interface())
 	case reflect.Map, reflect.Struct:
 		jsonBytes, err := json.Marshal(value)
 		if err != nil {
 			return 0, err
 		}
-		var result int
+		var result int64
 		if err := json.Unmarshal(jsonBytes, &result); err != nil {
 			return 0, err
 		}
