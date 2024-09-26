@@ -51,7 +51,15 @@ func SetLogger(logf func(format string, args ...any)) {
 
 // Provide registers a service provider for type T in the container.
 func Provide[T any](c *Container, provider func(c *Container) (T, error)) {
+	ProvideNamed[T](c, "", provider)
+}
+
+// ProvideNamed registers a named service provider for type T in the container.
+func ProvideNamed[T any](c *Container, name string, provider func(c *Container) (T, error)) {
 	serviceName := generateServiceName[T]()
+	if name != "" {
+		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+	}
 
 	c.mu.Lock()
 	if _, exists := c.services[serviceName]; exists {
@@ -82,7 +90,15 @@ func Provide[T any](c *Container, provider func(c *Container) (T, error)) {
 
 // Invoke retrieves a service of type T from the container.
 func Invoke[T any](c *Container) (T, error) {
+	return InvokeNamed[T](c, "")
+}
+
+// InvokeNamed retrieves a named service of type T from the container.
+func InvokeNamed[T any](c *Container, name string) (T, error) {
 	serviceName := generateServiceName[T]()
+	if name != "" {
+		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+	}
 
 	c.mu.RLock()
 	service, exists := c.services[serviceName]
@@ -118,6 +134,10 @@ func MustInvoke[T any](c *Container) T {
 	return x.Must1(Invoke[T](c))
 }
 
+func MustInvokeNamed[T any](c *Container, name string) T {
+	return x.Must1(InvokeNamed[T](c, name))
+}
+
 func ListServices(c *Container) []ServiceInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -147,17 +167,22 @@ type ServiceInfo struct {
 
 // InjectStruct injects services into the fields of a struct.
 func InjectStruct[T any](c *Container, s T) error {
+	return InjectStructNamed(c, s, nil)
+}
+
+// InjectStructNamed injects named services into the fields of a struct.
+func InjectStructNamed[T any](c *Container, s T, fieldNames map[string]string) error {
 	v := reflect.ValueOf(s)
 	if v.Kind() != reflect.Ptr {
-		xlog.Warn("InjectStruct: Non-pointer value passed, creating a new pointer", "type", reflect.TypeOf(s))
+		xlog.Warn("InjectStructNamed: Non-pointer value passed, creating a new pointer", "type", reflect.TypeOf(s))
 		ptr := reflect.New(reflect.TypeOf(s))
 		ptr.Elem().Set(v)
 		v = ptr
 	}
-	return injectStructRecursive(c, v)
+	return injectStructNamedRecursive(c, v, fieldNames)
 }
 
-func injectStructRecursive(c *Container, v reflect.Value) error {
+func injectStructNamedRecursive(c *Container, v reflect.Value, fieldNames map[string]string) error {
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
@@ -176,7 +201,7 @@ func injectStructRecursive(c *Container, v reflect.Value) error {
 		if tag != "-" {
 			// If the field is a struct or pointer to struct, recursively inject
 			if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
-				if err := injectStructRecursive(c, field); err != nil {
+				if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {
 					return err
 				}
 			}
@@ -184,6 +209,11 @@ func injectStructRecursive(c *Container, v reflect.Value) error {
 		}
 
 		serviceName := fieldType.Type.String()
+		if fieldNames != nil {
+			if name, ok := fieldNames[fieldType.Name]; ok {
+				serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+			}
+		}
 
 		c.mu.RLock()
 		service, exists := c.services[serviceName]
@@ -215,7 +245,7 @@ func injectStructRecursive(c *Container, v reflect.Value) error {
 
 		// Recursively inject for struct fields
 		if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
-			if err := injectStructRecursive(c, field); err != nil {
+			if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {
 				return err
 			}
 		}
@@ -282,10 +312,18 @@ func (c *Container) Clone() *Container {
 
 // SetService directly sets a service in the container without using a provider function.
 func (c *Container) SetService(service any) {
+	c.SetNamedService("", service)
+}
+
+// SetNamedService directly sets a named service in the container without using a provider function.
+func (c *Container) SetNamedService(name string, service any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	serviceName := reflect.TypeOf(service).String()
+	if name != "" {
+		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+	}
 	c.services[serviceName] = service
 	if c.logf != nil {
 		c.logf("Service %s set directly", serviceName)

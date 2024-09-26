@@ -1,6 +1,7 @@
 package xd_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/seefs001/xox/xd"
@@ -171,4 +172,140 @@ func TestInjectStructWithNestedDependencies(t *testing.T) {
 	assert.NotNil(t, s.DB.Config, "Expected Config to be injected into Database")
 	assert.Equal(t, "staging", s.DB.Config.Environment, "Unexpected environment in nested Config")
 	assert.Equal(t, "local", s.Env, "Env should not be modified by injection")
+}
+
+// TestProvideAndInvokeNamed tests the ProvideNamed and InvokeNamed functions
+func TestProvideAndInvokeNamed(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	// Provide named Config services
+	xd.ProvideNamed(c, "dev", func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "development"}, nil
+	})
+	xd.ProvideNamed(c, "prod", func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "production"}, nil
+	})
+
+	// Invoke named Config services
+	devConfig := xd.MustInvokeNamed[*Config](c, "dev")
+	prodConfig := xd.MustInvokeNamed[*Config](c, "prod")
+
+	assert.Equal(t, "development", devConfig.Environment, "Unexpected dev environment")
+	assert.Equal(t, "production", prodConfig.Environment, "Unexpected prod environment")
+
+	// Test invoking non-existent named service
+	_, err := xd.InvokeNamed[*Config](c, "staging")
+	assert.Error(t, err, "Expected error when invoking non-existent named service")
+}
+
+// TestInjectStructNamed tests the InjectStructNamed function
+func TestInjectStructNamed(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Database struct {
+		ConnectionString string
+	}
+
+	type Service struct {
+		DevDB  *Database `xd:"-"`
+		ProdDB *Database `xd:"-"`
+	}
+
+	xd.ProvideNamed(c, "dev", func(c *xd.Container) (*Database, error) {
+		return &Database{ConnectionString: "dev-db-connection"}, nil
+	})
+	xd.ProvideNamed(c, "prod", func(c *xd.Container) (*Database, error) {
+		return &Database{ConnectionString: "prod-db-connection"}, nil
+	})
+
+	s := &Service{}
+	err := xd.InjectStructNamed(c, s, map[string]string{
+		"DevDB":  "dev",
+		"ProdDB": "prod",
+	})
+
+	assert.NoError(t, err, "InjectStructNamed should not return an error")
+	assert.Equal(t, "dev-db-connection", s.DevDB.ConnectionString, "Unexpected dev database connection string")
+	assert.Equal(t, "prod-db-connection", s.ProdDB.ConnectionString, "Unexpected prod database connection string")
+}
+
+// TestSetNamedService tests the SetNamedService function
+func TestSetNamedService(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	c.SetNamedService("dev", &Config{Environment: "development"})
+	c.SetNamedService("prod", &Config{Environment: "production"})
+
+	devConfig := xd.MustInvokeNamed[*Config](c, "dev")
+	prodConfig := xd.MustInvokeNamed[*Config](c, "prod")
+
+	assert.Equal(t, "development", devConfig.Environment, "Unexpected dev environment")
+	assert.Equal(t, "production", prodConfig.Environment, "Unexpected prod environment")
+}
+
+// TestListServicesWithNamed tests the ListServices function with named services
+func TestListServicesWithNamed(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	xd.ProvideNamed(c, "dev", func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "development"}, nil
+	})
+	xd.ProvideNamed(c, "prod", func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "production"}, nil
+	})
+
+	// Invoke one of the named services
+	xd.MustInvokeNamed[*Config](c, "dev")
+
+	services := xd.ListServices(c)
+
+	assert.Equal(t, 2, len(services), "Expected 2 services")
+
+	for _, service := range services {
+		assert.True(t, service.Name == "*xd_test.Config:dev" || service.Name == "*xd_test.Config:prod", "Unexpected service name")
+		if service.Name == "*xd_test.Config:dev" {
+			assert.True(t, service.IsInvoked, "Expected dev service to be invoked")
+		} else {
+			assert.False(t, service.IsInvoked, "Expected prod service to not be invoked")
+		}
+	}
+}
+
+// TestRemoveNamedService tests removing a named service
+// FIXME: This test fails
+func TestRemoveNamedService(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	xd.ProvideNamed(c, "dev", func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "development"}, nil
+	})
+
+	// Check if the service exists
+	assert.True(t, c.HasService(reflect.TypeOf((*Config)(nil)).Elem()), "Expected service to exist")
+
+	// Remove the service
+	c.RemoveService(reflect.TypeOf((*Config)(nil)).Elem())
+
+	// Check if the service has been removed
+	assert.False(t, c.HasService(reflect.TypeOf((*Config)(nil)).Elem()), "Expected service to be removed")
+
+	// Try to invoke the removed service
+	_, err := xd.InvokeNamed[*Config](c, "dev")
+	assert.Error(t, err, "Expected error when invoking removed service")
 }
