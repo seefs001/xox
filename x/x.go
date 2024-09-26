@@ -11,16 +11,6 @@ import (
 	"time"
 )
 
-// Must0 returns the result of calling f if no error occurred.
-// If an error occurred, it panics with the error.
-func Must0[T any](f func() (T, error)) T {
-	result, err := f()
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 // Must1 returns the result if no error occurred.
 // If an error occurred, it panics with the error.
 func Must1[T any](v T, err error) T {
@@ -57,10 +47,11 @@ func Must4[T1, T2, T3, T4 any](v1 T1, v2 T2, v3 T3, v4 T4, err error) (T1, T2, T
 	return v1, v2, v3, v4
 }
 
-// Ignore0 returns the result of calling f, ignoring any error.
-func Ignore0[T any](f func() (T, error)) T {
-	result, _ := f()
-	return result
+// Must0 panics if the error is not nil.
+func Must0(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
 
 // Ignore1 returns the result, ignoring any error.
@@ -81,6 +72,10 @@ func Ignore3[T1, T2, T3 any](v1 T1, v2 T2, v3 T3, _ error) (T1, T2, T3) {
 // Ignore4 returns the results, ignoring any error.
 func Ignore4[T1, T2, T3, T4 any](v1 T1, v2 T2, v3 T3, v4 T4, _ error) (T1, T2, T3, T4) {
 	return v1, v2, v3, v4
+}
+
+// Ignore0 ignores the error.
+func Ignore0(_ error) {
 }
 
 // Where returns a new slice containing all elements of the collection
