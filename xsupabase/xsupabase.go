@@ -61,8 +61,26 @@ type QueryParams struct {
 
 // ErrorResponse represents an error response from the API
 type ErrorResponse struct {
-	Message string `json:"message"`
-	Code    string `json:"code"`
+	Message string      `json:"message"`
+	Code    interface{} `json:"code"`
+	Details string      `json:"details,omitempty"`
+}
+
+// User represents a user in the Supabase auth system
+type User struct {
+	ID               string    `json:"id"`
+	Aud              string    `json:"aud"`
+	Role             string    `json:"role"`
+	Email            string    `json:"email"`
+	EmailConfirmedAt time.Time `json:"email_confirmed_at"`
+	Phone            string    `json:"phone"`
+	ConfirmedAt      time.Time `json:"confirmed_at"`
+	LastSignInAt     time.Time `json:"last_sign_in_at"`
+	AppMetadata      Record    `json:"app_metadata"`
+	UserMetadata     Record    `json:"user_metadata"`
+	IdentityData     Record    `json:"identity_data"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // SetDebug enables or disables debug mode
@@ -71,8 +89,15 @@ func (c *Client) SetDebug(debug bool) {
 	c.httpClient.SetDebug(debug)
 }
 
+// SupabaseResponse represents a response from the Supabase API
+type SupabaseResponse struct {
+	Data   json.RawMessage `json:"data"`
+	Error  *ErrorResponse  `json:"error,omitempty"`
+	Status int             `json:"status"`
+}
+
 // execute sends an HTTP request to the Supabase API
-func (c *Client) execute(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+func (c *Client) execute(ctx context.Context, method, path string, body interface{}) (*SupabaseResponse, error) {
 	url := fmt.Sprintf("%s%s", c.projectURL, path)
 
 	c.httpClient.SetHeader("apikey", c.apiKey)
@@ -109,15 +134,25 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
+	supaResp := &SupabaseResponse{
+		Status: resp.StatusCode,
+		Data:   respBody,
+	}
+
 	if resp.StatusCode >= 400 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err != nil {
-			return nil, fmt.Errorf("error unmarshaling error response: %w", err)
+			return supaResp, fmt.Errorf("error unmarshaling error response: %w (body: %s)", err, string(respBody))
 		}
-		return nil, fmt.Errorf("API error: %s (code: %s)", errResp.Message, errResp.Code)
+		supaResp.Error = &errResp
+
+		// Convert the Code to a string, regardless of its original type
+		codeStr := fmt.Sprintf("%v", errResp.Code)
+
+		return supaResp, fmt.Errorf("API error: %s (code: %s, details: %s)", errResp.Message, codeStr, errResp.Details)
 	}
 
-	return respBody, nil
+	return supaResp, nil
 }
 
 // Select retrieves records from the specified table
@@ -145,18 +180,18 @@ func (c *Client) Select(ctx context.Context, table string, params QueryParams) (
 		path += "?" + strings.Join(query, "&")
 	}
 
-	respBody, err := c.execute(ctx, http.MethodGet, path, nil)
+	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Select operation failed: %w", err)
 	}
 
 	var records []Record
-	if err := json.Unmarshal(respBody, &records); err != nil {
-		return nil, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &records); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if c.debug {
-		xlog.Info("Select operation", "table", table, "params", params, "records_count", len(records))
+		xlog.Info("Select operation", "table", table, "params", params, "records_count", len(records), "status", supaResp.Status)
 	}
 
 	return records, nil
@@ -166,26 +201,25 @@ func (c *Client) Select(ctx context.Context, table string, params QueryParams) (
 func (c *Client) Insert(ctx context.Context, table string, record Record) (Record, error) {
 	path := fmt.Sprintf("/rest/v1/%s", table)
 
-	respBody, err := c.execute(ctx, http.MethodPost, path, record)
+	supaResp, err := c.execute(ctx, http.MethodPost, path, record)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Insert operation failed: %w", err)
 	}
 
-	// Handle empty response
-	if len(respBody) == 0 {
+	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Insert operation - empty response", "table", table, "record", record)
+			xlog.Info("Insert operation - empty response", "table", table, "record", record, "status", supaResp.Status)
 		}
 		return record, nil
 	}
 
 	var insertedRecord Record
-	if err := json.Unmarshal(respBody, &insertedRecord); err != nil {
-		return nil, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &insertedRecord); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if c.debug {
-		xlog.Info("Insert operation", "table", table, "record", record, "inserted_record", insertedRecord)
+		xlog.Info("Insert operation", "table", table, "record", record, "inserted_record", insertedRecord, "status", supaResp.Status)
 	}
 
 	return insertedRecord, nil
@@ -195,27 +229,25 @@ func (c *Client) Insert(ctx context.Context, table string, record Record) (Recor
 func (c *Client) Update(ctx context.Context, table string, id interface{}, record Record) (Record, error) {
 	path := fmt.Sprintf("/rest/v1/%s?id=eq.%v", table, id)
 
-	respBody, err := c.execute(ctx, http.MethodPatch, path, record)
+	supaResp, err := c.execute(ctx, http.MethodPatch, path, record)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Update operation failed: %w", err)
 	}
 
-	// Handle empty response for successful update
-	if len(respBody) == 0 {
+	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Update operation - empty response", "table", table, "id", id, "record", record)
+			xlog.Info("Update operation - empty response", "table", table, "id", id, "record", record, "status", supaResp.Status)
 		}
-		// Return the original record as Supabase doesn't return the updated record
 		return record, nil
 	}
 
 	var updatedRecord Record
-	if err := json.Unmarshal(respBody, &updatedRecord); err != nil {
-		return nil, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &updatedRecord); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if c.debug {
-		xlog.Info("Update operation", "table", table, "id", id, "record", record, "updated_record", updatedRecord)
+		xlog.Info("Update operation", "table", table, "id", id, "record", record, "updated_record", updatedRecord, "status", supaResp.Status)
 	}
 
 	return updatedRecord, nil
@@ -225,21 +257,20 @@ func (c *Client) Update(ctx context.Context, table string, id interface{}, recor
 func (c *Client) Delete(ctx context.Context, table string, id interface{}) error {
 	path := fmt.Sprintf("/rest/v1/%s?id=eq.%v", table, id)
 
-	respBody, err := c.execute(ctx, http.MethodDelete, path, nil)
+	supaResp, err := c.execute(ctx, http.MethodDelete, path, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("Delete operation failed: %w", err)
 	}
 
-	// Handle empty response for successful delete
-	if len(respBody) == 0 {
+	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Delete operation - empty response", "table", table, "id", id)
+			xlog.Info("Delete operation - empty response", "table", table, "id", id, "status", supaResp.Status)
 		}
 		return nil
 	}
 
 	if c.debug {
-		xlog.Info("Delete operation", "table", table, "id", id, "response", string(respBody))
+		xlog.Info("Delete operation", "table", table, "id", id, "response", string(supaResp.Data), "status", supaResp.Status)
 	}
 
 	return nil
@@ -249,16 +280,16 @@ func (c *Client) Delete(ctx context.Context, table string, id interface{}) error
 func (c *Client) ExecuteRPC(ctx context.Context, functionName string, params map[string]interface{}) (json.RawMessage, error) {
 	path := fmt.Sprintf("/rest/v1/rpc/%s", functionName)
 
-	respBody, err := c.execute(ctx, http.MethodPost, path, params)
+	supaResp, err := c.execute(ctx, http.MethodPost, path, params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ExecuteRPC operation failed: %w", err)
 	}
 
 	if c.debug {
-		xlog.Info("ExecuteRPC operation", "function", functionName, "params", params, "response", string(respBody))
+		xlog.Info("ExecuteRPC operation", "function", functionName, "params", params, "response", string(supaResp.Data), "status", supaResp.Status)
 	}
 
-	return json.RawMessage(respBody), nil
+	return supaResp.Data, nil
 }
 
 // Count returns the number of records in the specified table
@@ -268,16 +299,16 @@ func (c *Client) Count(ctx context.Context, table string, filter string) (int, e
 		path += "&" + filter
 	}
 
-	respBody, err := c.execute(ctx, http.MethodGet, path, nil)
+	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("Count operation failed: %w", err)
 	}
 
 	var result []struct {
 		Count int `json:"count"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return 0, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &result); err != nil {
+		return 0, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if len(result) == 0 {
@@ -287,7 +318,7 @@ func (c *Client) Count(ctx context.Context, table string, filter string) (int, e
 	count := result[0].Count
 
 	if c.debug {
-		xlog.Info("Count operation", "table", table, "filter", filter, "count", count)
+		xlog.Info("Count operation", "table", table, "filter", filter, "count", count, "status", supaResp.Status)
 	}
 
 	return count, nil
@@ -300,18 +331,18 @@ func (c *Client) Upsert(ctx context.Context, table string, records []Record, onC
 		path += "?on_conflict=" + onConflict
 	}
 
-	respBody, err := c.execute(ctx, http.MethodPost, path, records)
+	supaResp, err := c.execute(ctx, http.MethodPost, path, records)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Upsert operation failed: %w", err)
 	}
 
 	var upsertedRecords []Record
-	if err := json.Unmarshal(respBody, &upsertedRecords); err != nil {
-		return nil, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &upsertedRecords); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if c.debug {
-		xlog.Info("Upsert operation", "table", table, "records_count", len(records), "on_conflict", onConflict, "upserted_records_count", len(upsertedRecords))
+		xlog.Info("Upsert operation", "table", table, "records_count", len(records), "on_conflict", onConflict, "upserted_records_count", len(upsertedRecords), "status", supaResp.Status)
 	}
 
 	return upsertedRecords, nil
@@ -321,18 +352,18 @@ func (c *Client) Upsert(ctx context.Context, table string, records []Record, onC
 func (c *Client) BatchOperation(ctx context.Context, table string, operations []map[string]interface{}) ([]Record, error) {
 	path := fmt.Sprintf("/rest/v1/%s", table)
 
-	respBody, err := c.execute(ctx, http.MethodPost, path, operations)
+	supaResp, err := c.execute(ctx, http.MethodPost, path, operations)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("BatchOperation failed: %w", err)
 	}
 
 	var results []Record
-	if err := json.Unmarshal(respBody, &results); err != nil {
-		return nil, fmt.Errorf("error unmarshaling response: %w", err)
+	if err := json.Unmarshal(supaResp.Data, &results); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
 	}
 
 	if c.debug {
-		xlog.Info("BatchOperation", "table", table, "operations_count", len(operations), "results_count", len(results))
+		xlog.Info("BatchOperation", "table", table, "operations_count", len(operations), "results_count", len(results), "status", supaResp.Status)
 	}
 
 	return results, nil
@@ -365,4 +396,109 @@ func (c *Client) AsyncDelete(ctx context.Context, table string, id interface{}) 
 		err := c.Delete(ctx, table, id)
 		return struct{}{}, err
 	})
+}
+
+// CreateUser creates a new user
+func (c *Client) CreateUser(ctx context.Context, email, password string, userData Record) (*User, error) {
+	path := "/auth/v1/admin/users"
+	body := map[string]interface{}{
+		"email":    email,
+		"password": password,
+		"data":     userData,
+	}
+
+	supaResp, err := c.execute(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return nil, fmt.Errorf("CreateUser operation failed: %w", err)
+	}
+
+	var user User
+	if err := json.Unmarshal(supaResp.Data, &user); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Info("CreateUser operation", "email", email, "user_id", user.ID, "status", supaResp.Status)
+	}
+
+	return &user, nil
+}
+
+// GetUser retrieves a user by ID
+func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
+	path := fmt.Sprintf("/auth/v1/admin/users/%s", userID)
+
+	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GetUser operation failed: %w", err)
+	}
+
+	var user User
+	if err := json.Unmarshal(supaResp.Data, &user); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Info("GetUser operation", "user_id", userID, "status", supaResp.Status)
+	}
+
+	return &user, nil
+}
+
+// UpdateUser updates a user's information
+func (c *Client) UpdateUser(ctx context.Context, userID string, updates Record) (*User, error) {
+	path := fmt.Sprintf("/auth/v1/admin/users/%s", userID)
+
+	supaResp, err := c.execute(ctx, http.MethodPut, path, updates)
+	if err != nil {
+		return nil, fmt.Errorf("UpdateUser operation failed: %w", err)
+	}
+
+	var user User
+	if err := json.Unmarshal(supaResp.Data, &user); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Info("UpdateUser operation", "user_id", userID, "updates", updates, "status", supaResp.Status)
+	}
+
+	return &user, nil
+}
+
+// DeleteUser deletes a user
+func (c *Client) DeleteUser(ctx context.Context, userID string) error {
+	path := fmt.Sprintf("/auth/v1/admin/users/%s", userID)
+
+	supaResp, err := c.execute(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("DeleteUser operation failed: %w", err)
+	}
+
+	if c.debug {
+		xlog.Info("DeleteUser operation", "user_id", userID, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// ListUsers retrieves a list of users
+func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]User, error) {
+	path := fmt.Sprintf("/auth/v1/admin/users?page=%d&per_page=%d", page, perPage)
+
+	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ListUsers operation failed: %w", err)
+	}
+
+	var users []User
+	if err := json.Unmarshal(supaResp.Data, &users); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response: %w (body: %s)", err, string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Info("ListUsers operation", "page", page, "per_page", perPage, "users_count", len(users), "status", supaResp.Status)
+	}
+
+	return users, nil
 }

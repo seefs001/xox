@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/seefs001/xox/xenv"
@@ -76,34 +77,14 @@ func main() {
 			return
 		}
 		xlog.Info("Updated user", "response", updateResp)
-		// Insert a new user to delete
-		newUserToDelete := xsupabase.Record{
-			"name":  "Jane Doe",
-			"email": "jane@example.com",
-		}
-		insertRespToDelete, err := client.Insert(ctx, "users", newUserToDelete)
-		if err != nil {
-			xlog.Error("Failed to insert user to delete", "error", err)
-			return
-		}
-		xlog.Info("Inserted user to delete", "response", insertRespToDelete)
 
-		// Delete the newly inserted user
-		newUserID := insertRespToDelete["id"]
-		err = client.Delete(ctx, "users", newUserID)
-		if err != nil {
-			xlog.Error("Failed to delete new user", "error", err)
-			return
-		}
-		xlog.Info("New user deleted successfully")
-
-		// Delete the original user
+		// Delete the user
 		err = client.Delete(ctx, "users", userID)
 		if err != nil {
-			xlog.Error("Failed to delete original user", "error", err)
+			xlog.Error("Failed to delete user", "error", err)
 			return
 		}
-		xlog.Info("Original user deleted successfully")
+		xlog.Info("User deleted successfully")
 	} else {
 		xlog.Info("No users found to update or delete")
 	}
@@ -117,13 +98,57 @@ func main() {
 	xlog.Info("User count", "count", count)
 
 	// Execute a stored procedure
-	params := map[string]interface{}{
-		"name_pattern": "%John%",
-	}
-	rpcResp, err := client.ExecuteRPC(ctx, "get_users_by_name", params)
+	// params := map[string]interface{}{
+	// 	"name_pattern": "%John%",
+	// }
+	// rpcResp, err := client.ExecuteRPC(ctx, "get_users_by_name", params)
+	// if err != nil {
+	// 	xlog.Error("Failed to execute RPC", "error", err)
+	// 	return
+	// }
+	// xlog.Info("RPC result", "response", string(rpcResp))
+
+	// Create a new user in the auth system
+	newAuthUser, err := client.CreateUser(ctx, "newuser@example.com", "password123", xsupabase.Record{"name": "New User"})
 	if err != nil {
-		xlog.Error("Failed to execute RPC", "error", err)
-		return
+		if strings.Contains(err.Error(), "User not allowed") {
+			xlog.Error("Failed to create new auth user: insufficient permissions. Make sure you're using an admin API key.", "error", err)
+		} else {
+			xlog.Error("Failed to create new auth user", "error", err)
+		}
+	} else {
+		xlog.Info("Created new auth user", "user", newAuthUser)
+
+		// Get user by ID
+		fetchedUser, err := client.GetUser(ctx, newAuthUser.ID)
+		if err != nil {
+			xlog.Error("Failed to get user", "error", err)
+			return
+		}
+		xlog.Info("Fetched user", "user", fetchedUser)
+
+		// Update user
+		updatedUser, err := client.UpdateUser(ctx, newAuthUser.ID, xsupabase.Record{"name": "Updated New User"})
+		if err != nil {
+			xlog.Error("Failed to update user", "error", err)
+			return
+		}
+		xlog.Info("Updated auth user", "user", updatedUser)
+
+		// List users
+		users, err := client.ListUsers(ctx, 1, 10)
+		if err != nil {
+			xlog.Error("Failed to list users", "error", err)
+			return
+		}
+		xlog.Info("Listed users", "count", len(users))
+
+		// Delete user
+		// err = client.DeleteUser(ctx, newAuthUser.ID)
+		// if err != nil {
+		// 	xlog.Error("Failed to delete user", "error", err)
+		// 	return
+		// }
+		// xlog.Info("Deleted auth user successfully")
 	}
-	xlog.Info("RPC result", "response", string(rpcResp))
 }
