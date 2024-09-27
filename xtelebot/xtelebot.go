@@ -35,29 +35,40 @@ const (
 	MethodSendVideoNote       = "sendVideoNote"
 	MethodSendMediaGroup      = "sendMediaGroup"
 	MethodGetMe               = "getMe"
+	MethodEditMessageText     = "editMessageText"
+	MethodEditMessageCaption  = "editMessageCaption"
+	MethodEditMessageMedia    = "editMessageMedia"
 
 	// Parameter Keys
-	ParamChatID          = "chat_id"
-	ParamText            = "text"
-	ParamPhoto           = "photo"
-	ParamDocument        = "document"
-	ParamLatitude        = "latitude"
-	ParamLongitude       = "longitude"
-	ParamReplyMarkup     = "reply_markup"
-	ParamParseMode       = "parse_mode"
-	ParamCallbackQueryID = "callback_query_id"
-	ParamURL             = "url"
-	ParamMaxConnections  = "max_connections"
-	ParamAllowedUpdates  = "allowed_updates"
-	ParamCertificate     = "certificate"
-	ParamCommands        = "commands"
-	ParamAudio           = "audio"
-	ParamVideo           = "video"
-	ParamVoice           = "voice"
-	ParamVideoNote       = "video_note"
-	ParamMedia           = "media"
-	ParamOffset          = "offset"
-	ParamLimit           = "limit"
+	ParamChatID                = "chat_id"
+	ParamText                  = "text"
+	ParamPhoto                 = "photo"
+	ParamDocument              = "document"
+	ParamLatitude              = "latitude"
+	ParamLongitude             = "longitude"
+	ParamReplyMarkup           = "reply_markup"
+	ParamParseMode             = "parse_mode"
+	ParamCallbackQueryID       = "callback_query_id"
+	ParamURL                   = "url"
+	ParamMaxConnections        = "max_connections"
+	ParamAllowedUpdates        = "allowed_updates"
+	ParamCertificate           = "certificate"
+	ParamCommands              = "commands"
+	ParamAudio                 = "audio"
+	ParamVideo                 = "video"
+	ParamVoice                 = "voice"
+	ParamVideoNote             = "video_note"
+	ParamMedia                 = "media"
+	ParamOffset                = "offset"
+	ParamLimit                 = "limit"
+	ParamBusinessConnectionID  = "business_connection_id"
+	ParamMessageID             = "message_id"
+	ParamInlineMessageID       = "inline_message_id"
+	ParamEntities              = "entities"
+	ParamLinkPreviewOptions    = "link_preview_options"
+	ParamCaption               = "caption"
+	ParamCaptionEntities       = "caption_entities"
+	ParamShowCaptionAboveMedia = "show_caption_above_media"
 )
 
 // Bot represents a Telegram Bot
@@ -1025,4 +1036,293 @@ func (b *Bot) SendMediaGroup(ctx context.Context, chatIDOrUsername interface{}, 
 	}
 
 	return resp.Result, nil
+}
+
+// EditMessageText edits text and game messages
+func (b *Bot) EditMessageText(ctx context.Context, options ...MessageOption) (*Message, error) {
+	params := url.Values{}
+
+	for _, option := range options {
+		option(params)
+	}
+
+	body, err := b.APIRequest(ctx, MethodEditMessageText, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Ok     bool    `json:"ok"`
+		Result Message `json:"result"`
+	}
+
+	err = json.Unmarshal(body, &resp)
+	if err != nil {
+		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
+		return nil, err
+	}
+
+	if !resp.Ok {
+		err := fmt.Errorf("API response not OK")
+		b.errorHandler(err)
+		return nil, err
+	}
+
+	return &resp.Result, nil
+}
+
+// EditMessageCaption edits captions of messages
+func (b *Bot) EditMessageCaption(ctx context.Context, options ...MessageOption) (*Message, error) {
+	params := url.Values{}
+
+	for _, option := range options {
+		option(params)
+	}
+
+	body, err := b.APIRequest(ctx, MethodEditMessageCaption, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Ok     bool    `json:"ok"`
+		Result Message `json:"result"`
+	}
+
+	err = json.Unmarshal(body, &resp)
+	if err != nil {
+		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
+		return nil, err
+	}
+
+	if !resp.Ok {
+		err := fmt.Errorf("API response not OK")
+		b.errorHandler(err)
+		return nil, err
+	}
+
+	return &resp.Result, nil
+}
+
+// EditMessageMedia edits animation, audio, document, photo, or video messages
+func (b *Bot) EditMessageMedia(ctx context.Context, options ...MessageOption) (*Message, error) {
+	params := url.Values{}
+
+	for _, option := range options {
+		option(params)
+	}
+
+	body, err := b.APIRequest(ctx, MethodEditMessageMedia, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Ok     bool    `json:"ok"`
+		Result Message `json:"result"`
+	}
+
+	err = json.Unmarshal(body, &resp)
+	if err != nil {
+		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
+		return nil, err
+	}
+
+	if !resp.Ok {
+		err := fmt.Errorf("API response not OK")
+		b.errorHandler(err)
+		return nil, err
+	}
+
+	return &resp.Result, nil
+}
+
+// WithBusinessConnectionID sets the business_connection_id parameter
+func WithBusinessConnectionID(id string) MessageOption {
+	return func(v url.Values) {
+		v.Set("business_connection_id", id)
+	}
+}
+
+// WithChatID sets the chat_id parameter
+func WithChatID(chatID interface{}) MessageOption {
+	return func(v url.Values) {
+		switch id := chatID.(type) {
+		case int64:
+			v.Set(ParamChatID, strconv.FormatInt(id, 10))
+		case string:
+			v.Set(ParamChatID, id)
+		}
+	}
+}
+
+// WithMessageID sets the message_id parameter
+func WithMessageID(messageID int) MessageOption {
+	return func(v url.Values) {
+		v.Set(ParamMessageID, strconv.Itoa(messageID))
+	}
+}
+
+// WithInlineMessageID sets the inline_message_id parameter
+func WithInlineMessageID(inlineMessageID string) MessageOption {
+	return func(v url.Values) {
+		v.Set("inline_message_id", inlineMessageID)
+	}
+}
+
+// WithText sets the text parameter
+func WithText(text string) MessageOption {
+	return func(v url.Values) {
+		v.Set(ParamText, text)
+	}
+}
+
+// WithCaption sets the caption parameter
+func WithCaption(caption string) MessageOption {
+	return func(v url.Values) {
+		v.Set(ParamCaption, caption)
+	}
+}
+
+// MessageEntity represents one special entity in a text message
+type MessageEntity struct {
+	Type          string `json:"type"`
+	Offset        int    `json:"offset"`
+	Length        int    `json:"length"`
+	URL           string `json:"url,omitempty"`
+	User          *User  `json:"user,omitempty"`
+	Language      string `json:"language,omitempty"`
+	CustomEmojiID string `json:"custom_emoji_id,omitempty"`
+}
+
+// WithEntities sets the entities parameter
+func WithEntities(entities []MessageEntity) MessageOption {
+	return func(v url.Values) {
+		entitiesJSON, _ := json.Marshal(entities)
+		v.Set(ParamEntities, string(entitiesJSON))
+	}
+}
+
+// WithShowCaptionAboveMedia sets the show_caption_above_media parameter
+func WithShowCaptionAboveMedia(show bool) MessageOption {
+	return func(v url.Values) {
+		v.Set(ParamShowCaptionAboveMedia, strconv.FormatBool(show))
+	}
+}
+
+// WithMedia sets the media parameter
+// InputMedia represents the content of a media message to be sent
+type InputMedia interface {
+	GetType() string
+}
+
+// InputMediaPhoto represents a photo to be sent
+type InputMediaPhoto struct {
+	Type                  string          `json:"type"`
+	Media                 string          `json:"media"`
+	Caption               string          `json:"caption,omitempty"`
+	ParseMode             string          `json:"parse_mode,omitempty"`
+	CaptionEntities       []MessageEntity `json:"caption_entities,omitempty"`
+	ShowCaptionAboveMedia bool            `json:"show_caption_above_media,omitempty"`
+	HasSpoiler            bool            `json:"has_spoiler,omitempty"`
+}
+
+func (imp InputMediaPhoto) GetType() string {
+	return "photo"
+}
+
+// InputMediaVideo represents a video to be sent
+type InputMediaVideo struct {
+	Type                  string          `json:"type"`
+	Media                 string          `json:"media"`
+	Thumbnail             string          `json:"thumbnail,omitempty"`
+	Caption               string          `json:"caption,omitempty"`
+	ParseMode             string          `json:"parse_mode,omitempty"`
+	CaptionEntities       []MessageEntity `json:"caption_entities,omitempty"`
+	ShowCaptionAboveMedia bool            `json:"show_caption_above_media,omitempty"`
+	Width                 int             `json:"width,omitempty"`
+	Height                int             `json:"height,omitempty"`
+	Duration              int             `json:"duration,omitempty"`
+	SupportsStreaming     bool            `json:"supports_streaming,omitempty"`
+	HasSpoiler            bool            `json:"has_spoiler,omitempty"`
+}
+
+func (imv InputMediaVideo) GetType() string {
+	return "video"
+}
+
+// InputMediaAnimation represents an animation file to be sent
+type InputMediaAnimation struct {
+	Type                  string          `json:"type"`
+	Media                 string          `json:"media"`
+	Thumbnail             string          `json:"thumbnail,omitempty"`
+	Caption               string          `json:"caption,omitempty"`
+	ParseMode             string          `json:"parse_mode,omitempty"`
+	CaptionEntities       []MessageEntity `json:"caption_entities,omitempty"`
+	ShowCaptionAboveMedia bool            `json:"show_caption_above_media,omitempty"`
+	Width                 int             `json:"width,omitempty"`
+	Height                int             `json:"height,omitempty"`
+	Duration              int             `json:"duration,omitempty"`
+	HasSpoiler            bool            `json:"has_spoiler,omitempty"`
+}
+
+func (ima InputMediaAnimation) GetType() string {
+	return "animation"
+}
+
+// InputMediaAudio represents an audio file to be sent
+type InputMediaAudio struct {
+	Type            string          `json:"type"`
+	Media           string          `json:"media"`
+	Thumbnail       string          `json:"thumbnail,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
+	Duration        int             `json:"duration,omitempty"`
+	Performer       string          `json:"performer,omitempty"`
+	Title           string          `json:"title,omitempty"`
+}
+
+func (ima InputMediaAudio) GetType() string {
+	return "audio"
+}
+
+// InputMediaDocument represents a general file to be sent
+type InputMediaDocument struct {
+	Type                        string          `json:"type"`
+	Media                       string          `json:"media"`
+	Thumbnail                   string          `json:"thumbnail,omitempty"`
+	Caption                     string          `json:"caption,omitempty"`
+	ParseMode                   string          `json:"parse_mode,omitempty"`
+	CaptionEntities             []MessageEntity `json:"caption_entities,omitempty"`
+	DisableContentTypeDetection bool            `json:"disable_content_type_detection,omitempty"`
+}
+
+func (imd InputMediaDocument) GetType() string {
+	return "document"
+}
+
+// WithMedia sets the media parameter
+func WithMedia(media InputMedia) MessageOption {
+	return func(v url.Values) {
+		mediaJSON, _ := json.Marshal(media)
+		v.Set(ParamMedia, string(mediaJSON))
+	}
+}
+
+// LinkPreviewOptions represents the options for link preview generation
+type LinkPreviewOptions struct {
+	IsDisabled       bool   `json:"is_disabled,omitempty"`
+	URL              string `json:"url,omitempty"`
+	PreferSmallMedia bool   `json:"prefer_small_media,omitempty"`
+	PreferLargeMedia bool   `json:"prefer_large_media,omitempty"`
+	ShowAboveText    bool   `json:"show_above_text,omitempty"`
+}
+
+// WithLinkPreviewOptions sets the link_preview_options parameter
+func WithLinkPreviewOptions(options LinkPreviewOptions) MessageOption {
+	return func(v url.Values) {
+		optionsJSON, _ := json.Marshal(options)
+		v.Set(ParamLinkPreviewOptions, string(optionsJSON))
+	}
 }
