@@ -17,6 +17,85 @@ import (
 	"github.com/seefs001/xox/xtelebot"
 )
 
+// Handler is a function that handles a specific update
+type Handler func(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update)
+
+// Router manages the routing of updates to handlers
+type Router struct {
+	commandHandlers map[string]Handler
+	textHandlers    []Handler
+	privateHandlers []Handler
+	groupHandlers   []Handler
+	// Add more handler types as needed
+}
+
+// NewRouter creates a new Router
+func NewRouter() *Router {
+	return &Router{
+		commandHandlers: make(map[string]Handler),
+		textHandlers:    []Handler{},
+		privateHandlers: []Handler{},
+		groupHandlers:   []Handler{},
+	}
+}
+
+// Handle registers a handler for a specific command
+func (r *Router) Handle(command string, handler Handler) {
+	r.commandHandlers[command] = handler
+}
+
+// OnText registers a handler for text messages
+func (r *Router) OnText(handler Handler) {
+	r.textHandlers = append(r.textHandlers, handler)
+}
+
+// OnPrivate registers a handler for private messages
+func (r *Router) OnPrivate(handler Handler) {
+	r.privateHandlers = append(r.privateHandlers, handler)
+}
+
+// OnGroup registers a handler for group messages
+func (r *Router) OnGroup(handler Handler) {
+	r.groupHandlers = append(r.groupHandlers, handler)
+}
+
+// HandleUpdate routes an update to the appropriate handler
+func (r *Router) HandleUpdate(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	if update.Message != nil {
+		if update.Message.Text != "" {
+			if strings.HasPrefix(update.Message.Text, "/") {
+				command := strings.Split(update.Message.Text, " ")[0]
+				if handler, ok := r.commandHandlers[command]; ok {
+					handler(ctx, bot, update)
+					return
+				}
+			}
+
+			// Handle text messages
+			for _, handler := range r.textHandlers {
+				handler(ctx, bot, update)
+			}
+		}
+
+		// Handle private messages
+		if update.Message.Chat.Type == "private" {
+			for _, handler := range r.privateHandlers {
+				handler(ctx, bot, update)
+			}
+		}
+
+		// Handle group messages
+		if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
+			for _, handler := range r.groupHandlers {
+				handler(ctx, bot, update)
+			}
+		}
+	}
+
+	// Handle unrecognized commands or non-command messages
+	defaultHandler(ctx, bot, update)
+}
+
 func main() {
 	xenv.Load()
 	// Get the Telegram Bot Token from environment variables
@@ -49,6 +128,23 @@ func main() {
 	// Add this new function call
 	getBotInfo(ctx, bot)
 
+	// Create a new router
+	router := NewRouter()
+
+	// Register command handlers
+	router.Handle("/start", startHandler)
+	router.Handle("/hello", helloHandler)
+	router.Handle("/photo", photoHandler)
+	router.Handle("/location", locationHandler)
+	router.Handle("/keyboard", keyboardHandler)
+	router.Handle("/echo", echoHandler)
+	router.Handle("/deletecommands", deleteCommandsHandler)
+
+	// Register other types of handlers
+	router.OnText(textHandler)
+	router.OnPrivate(privateHandler)
+	router.OnGroup(groupHandler)
+
 	// Create a channel to receive updates
 	updatesChan, err := bot.GetUpdatesChan(ctx, offset, 100)
 	if err != nil {
@@ -58,12 +154,46 @@ func main() {
 
 	// Listen for updates
 	for update := range updatesChan {
-		if update.Message != nil {
-			handleMessage(ctx, bot, update.Message)
-		} else if update.CallbackQuery != nil {
-			handleCallbackQuery(ctx, bot, update.CallbackQuery)
-		}
+		router.HandleUpdate(ctx, bot, update)
 		offset = update.UpdateID + 1
+	}
+}
+
+// Handlers
+
+func startHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	sendWelcomeMessage(ctx, bot, update.Message.Chat.ID)
+}
+
+func helloHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	sendGreeting(ctx, bot, update.Message.Chat.ID, update.Message.From.FirstName)
+}
+
+func photoHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	sendPhoto(ctx, bot, update.Message.Chat.ID)
+}
+
+func locationHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	sendLocation(ctx, bot, update.Message.Chat.ID)
+}
+
+func keyboardHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	sendInlineKeyboard(ctx, bot, update.Message.Chat.ID)
+}
+
+func echoHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	echoMessage(ctx, bot, update.Message)
+}
+
+func deleteCommandsHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	deleteCommands(ctx, bot, update.Message.Chat.ID)
+}
+
+func defaultHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	if update.Message != nil {
+		sendDefaultResponse(ctx, bot, update.Message.Chat.ID)
+	} else if update.CallbackQuery != nil {
+		handleCallbackQuery(ctx, bot, update.CallbackQuery)
 	}
 }
 
@@ -115,30 +245,6 @@ func getUpdates(ctx context.Context, bot *xtelebot.Bot, offset int) ([]xtelebot.
 	}
 
 	return resp.Result, nil
-}
-
-func handleMessage(ctx context.Context, bot *xtelebot.Bot, message *xtelebot.Message) {
-	xlog.Info("Received message", "from", message.From.Username, "text", message.Text)
-	xlog.Info(x.MustToJSON(message))
-
-	switch {
-	case strings.HasPrefix(message.Text, "/start"):
-		sendWelcomeMessage(ctx, bot, message.Chat.ID)
-	case strings.HasPrefix(message.Text, "/hello"):
-		sendGreeting(ctx, bot, message.Chat.ID, message.From.FirstName)
-	case strings.HasPrefix(message.Text, "/photo"):
-		sendPhoto(ctx, bot, message.Chat.ID)
-	case strings.HasPrefix(message.Text, "/location"):
-		sendLocation(ctx, bot, message.Chat.ID)
-	case strings.HasPrefix(message.Text, "/keyboard"):
-		sendInlineKeyboard(ctx, bot, message.Chat.ID)
-	case strings.HasPrefix(message.Text, "/echo"):
-		echoMessage(ctx, bot, message)
-	case strings.HasPrefix(message.Text, "/deletecommands"):
-		deleteCommands(ctx, bot, message.Chat.ID)
-	default:
-		sendDefaultResponse(ctx, bot, message.Chat.ID)
-	}
 }
 
 func sendWelcomeMessage(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
@@ -295,4 +401,21 @@ func getBotInfo(ctx context.Context, bot *xtelebot.Bot) {
 		"can_read_all_group_messages", botInfo.CanReadAllGroupMessages,
 		"supports_inline_queries", botInfo.SupportsInlineQueries,
 	)
+}
+
+// New handlers for different types of messages
+
+func textHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	xlog.Info("Received text message", "from", update.Message.From.Username, "text", update.Message.Text)
+	// Add your text message handling logic here
+}
+
+func privateHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	xlog.Info("Received private message", "from", update.Message.From.Username)
+	// Add your private message handling logic here
+}
+
+func groupHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
+	xlog.Info("Received group message", "from", update.Message.From.Username, "group", update.Message.Chat.Title)
+	// Add your group message handling logic here
 }
