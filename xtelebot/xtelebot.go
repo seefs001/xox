@@ -79,6 +79,7 @@ type Bot struct {
 	errorHandler   ErrorHandler
 	requestTimeout time.Duration
 	rateLimiter    *RateLimiter
+	debug          bool
 }
 
 // BotOption allows customizing the Bot
@@ -96,14 +97,20 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 	bot := &Bot{
 		token:          token,
 		baseURL:        "https://api.telegram.org",
-		client:         xhttpc.NewClient(xhttpc.WithDebug(true)),
+		client:         xhttpc.NewClient(),
 		errorHandler:   defaultErrorHandler,
 		requestTimeout: 30 * time.Second,
 		rateLimiter:    NewRateLimiter(0, 0), // Default to no rate limiting
+		debug:          false,                // Default debug mode is off
 	}
 
 	for _, option := range options {
 		option(bot)
+	}
+
+	if bot.debug {
+		xlog.Info("Bot created in debug mode")
+		bot.client.SetDebug(true)
 	}
 
 	return bot, nil
@@ -1325,4 +1332,42 @@ func WithLinkPreviewOptions(options LinkPreviewOptions) MessageOption {
 		optionsJSON, _ := json.Marshal(options)
 		v.Set(ParamLinkPreviewOptions, string(optionsJSON))
 	}
+}
+
+// GetUpdatesChan returns a channel that receives updates
+func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan Update, error) {
+	updates := make(chan Update, 100)
+
+	go func() {
+		defer close(updates)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				newUpdates, err := b.GetUpdates(ctx, offset, limit)
+				if err != nil {
+					b.errorHandler(fmt.Errorf("failed to get updates: %w", err))
+					time.Sleep(5 * time.Second)
+					continue
+				}
+
+				for _, update := range newUpdates {
+					select {
+					case <-ctx.Done():
+						return
+					case updates <- update:
+						offset = update.UpdateID + 1
+					}
+				}
+
+				if len(newUpdates) == 0 {
+					time.Sleep(1 * time.Second)
+				}
+			}
+		}
+	}()
+
+	return updates, nil
 }

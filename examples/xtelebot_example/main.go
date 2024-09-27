@@ -49,23 +49,21 @@ func main() {
 	// Add this new function call
 	getBotInfo(ctx, bot)
 
-	for {
-		// Get updates from Telegram
-		updates, err := getUpdates(ctx, bot, offset)
-		if err != nil {
-			xlog.Error("Failed to get updates", "error", err)
-			time.Sleep(5 * time.Second) // Wait before retrying
-			continue
-		}
+	// Create a channel to receive updates
+	updatesChan, err := bot.GetUpdatesChan(ctx, offset, 100)
+	if err != nil {
+		xlog.Error("Failed to get updates channel", "error", err)
+		return
+	}
 
-		for _, update := range updates {
-			if update.Message != nil {
-				handleMessage(ctx, bot, update.Message)
-			} else if update.CallbackQuery != nil {
-				handleCallbackQuery(ctx, bot, update.CallbackQuery)
-			}
-			offset = update.UpdateID + 1
+	// Listen for updates
+	for update := range updatesChan {
+		if update.Message != nil {
+			handleMessage(ctx, bot, update.Message)
+		} else if update.CallbackQuery != nil {
+			handleCallbackQuery(ctx, bot, update.CallbackQuery)
 		}
+		offset = update.UpdateID + 1
 	}
 }
 
