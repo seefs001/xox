@@ -63,6 +63,27 @@ func Wrap(err error, msg string) *Error {
 	}
 }
 
+// Wrapf wraps an existing error with additional context and captures the stack trace
+// Usage: err = xerror.Wrapf(err, "failed to process request")
+func Wrapf(err error, format string, args ...interface{}) *Error {
+	if err == nil {
+		return nil
+	}
+	return &Error{
+		Err:       fmt.Errorf(format, args...),
+		Stack:     getStack(),
+		Timestamp: time.Now(),
+		Code:      0,
+		Context:   make(map[string]interface{}),
+	}
+}
+
+// Newf creates a new Error with a formatted error message
+// Usage: err := xerror.Newf("failed to process item %d: %v", itemID, err)
+func Newf(format string, args ...interface{}) *Error {
+	return New(fmt.Sprintf(format, args...))
+}
+
 // WrapWithCode wraps an existing error with additional context, an error code, and captures the stack trace
 // Usage: err = xerror.WrapWithCode(err, "failed to process request", 500)
 func WrapWithCode(err error, msg string, code int) *Error {
