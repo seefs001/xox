@@ -56,10 +56,11 @@ type RetryConfig struct {
 
 // LogOptions contains configuration for debug logging
 type LogOptions struct {
-	LogHeaders     bool
-	LogBody        bool
-	LogResponse    bool
-	MaxBodyLogSize int
+	LogHeaders      bool
+	LogBody         bool
+	LogResponse     bool
+	MaxBodyLogSize  int
+	HeaderKeysToLog []string // New field to specify which header keys to log
 }
 
 // ClientOption allows customizing the Client
@@ -89,10 +90,11 @@ func NewClient(options ...ClientOption) *Client {
 		userAgent: defaultUserAgent,
 		debug:     false,
 		logOptions: LogOptions{
-			LogHeaders:     true,
-			LogBody:        true,
-			LogResponse:    true,
-			MaxBodyLogSize: defaultMaxBodyLogSize,
+			LogHeaders:      false,
+			LogBody:         true,
+			LogResponse:     true,
+			MaxBodyLogSize:  defaultMaxBodyLogSize,
+			HeaderKeysToLog: []string{}, // Don't log any headers by default
 		},
 		headers:     make(http.Header),
 		queryParams: make(url.Values),
@@ -485,8 +487,10 @@ func (c *Client) logRequest(req *http.Request) {
 
 	if c.logOptions.LogHeaders {
 		for key, values := range req.Header {
-			for _, value := range values {
-				xlog.Info("Request Header", "key", key, "value", value)
+			if c.shouldLogHeader(key) {
+				for _, value := range values {
+					xlog.Info("Request Header", "key", key, "value", value)
+				}
 			}
 		}
 	}
@@ -531,8 +535,10 @@ func (c *Client) logResponse(resp *http.Response) {
 
 	if c.logOptions.LogHeaders {
 		for key, values := range resp.Header {
-			for _, value := range values {
-				xlog.Info("Response Header", "key", key, "value", value)
+			if c.shouldLogHeader(key) {
+				for _, value := range values {
+					xlog.Info("Response Header", "key", key, "value", value)
+				}
 			}
 		}
 	}
@@ -570,6 +576,18 @@ func (c *Client) logResponse(resp *http.Response) {
 			}
 		}
 	}
+}
+
+func (c *Client) shouldLogHeader(key string) bool {
+	if len(c.logOptions.HeaderKeysToLog) == 0 {
+		return false // Don't log any headers if no specific keys are set
+	}
+	for _, allowedKey := range c.logOptions.HeaderKeysToLog {
+		if strings.EqualFold(key, allowedKey) {
+			return true
+		}
+	}
+	return false
 }
 
 func basicAuth(username, password string) string {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,53 +18,84 @@ import (
 var (
 	defaultLogger  *slog.Logger
 	defaultHandler slog.Handler
+	logConfig      LogConfig
 )
 
+// LogConfig represents the configuration for logging.
+type LogConfig struct {
+	IncludeFileAndLine bool
+}
+
 func init() {
+	logConfig = LogConfig{
+		IncludeFileAndLine: true, // Default to including file and line
+	}
 	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})
 	defaultLogger = slog.New(defaultHandler)
 }
 
+// SetLogConfig sets the logging configuration.
+func SetLogConfig(config LogConfig) {
+	logConfig = config
+}
+
 // Debug logs a debug message.
 func Debug(msg string, args ...any) {
-	defaultLogger.Debug(msg, args...)
+	log(slog.LevelDebug, msg, args...)
 }
 
 // Debugf logs a formatted debug message.
 func Debugf(format string, args ...any) {
-	defaultLogger.Debug(fmt.Sprintf(format, args...))
+	log(slog.LevelDebug, fmt.Sprintf(format, args...))
 }
 
 // Info logs an info message.
 func Info(msg string, args ...any) {
-	defaultLogger.Info(msg, args...)
+	log(slog.LevelInfo, msg, args...)
 }
 
 // Infof logs a formatted info message.
 func Infof(format string, args ...any) {
-	defaultLogger.Info(fmt.Sprintf(format, args...))
+	log(slog.LevelInfo, fmt.Sprintf(format, args...))
 }
 
 // Warn logs a warning message.
 func Warn(msg string, args ...any) {
-	defaultLogger.Warn(msg, args...)
+	log(slog.LevelWarn, msg, args...)
 }
 
 // Warnf logs a formatted warning message.
 func Warnf(format string, args ...any) {
-	defaultLogger.Warn(fmt.Sprintf(format, args...))
+	log(slog.LevelWarn, fmt.Sprintf(format, args...))
 }
 
 // Error logs an error message.
 func Error(msg string, args ...any) {
-	defaultLogger.Error(msg, args...)
+	log(slog.LevelError, msg, args...)
 }
 
 // Errorf logs a formatted error message.
 func Errorf(format string, args ...any) {
-	defaultLogger.Error(fmt.Sprintf(format, args...))
+	log(slog.LevelError, fmt.Sprintf(format, args...))
+}
+
+// log is a helper function to add file and line information if configured
+func log(level slog.Level, msg string, args ...any) {
+	if logConfig.IncludeFileAndLine {
+		_, file, line, ok := runtime.Caller(2)
+		if ok {
+			// Use relative path for file
+			if rel, err := filepath.Rel(filepath.Dir(file), file); err == nil {
+				file = rel
+			}
+			// Format file:line to be clickable in most IDEs
+			fileInfo := fmt.Sprintf("%s:%d", file, line)
+			args = append(args, "source", fileInfo)
+		}
+	}
+	defaultLogger.Log(context.Background(), level, msg, args...)
 }
 
 // ColorConsoleHandler implements a color console handler.
@@ -109,7 +141,11 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Apply attributes
 	var attrs []string
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
+		if a.Key == "source" {
+			attrs = append(attrs, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+		} else {
+			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
+		}
 		return true
 	})
 	attrStr := ""
