@@ -3,9 +3,11 @@ package xlog_test
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"testing"
 
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xlog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,11 +15,15 @@ import (
 
 func TestColorConsoleHandler(t *testing.T) {
 	assert := assert.New(t)
-
 	buf := &bytes.Buffer{}
-	handler := xlog.NewColorConsoleHandler(buf, nil)
+	handler, err := xlog.NewColorConsoleHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug, // Set the level to Debug
+	})
+	require.NoError(t, err, "NewColorConsoleHandler should not return an error")
 
-	xlog.Add(handler)
+	// Create a new logger with the test handler
+	logger := slog.New(handler)
+	xlog.SetLogger(logger) // Assuming you have a SetLogger function in xlog package
 
 	xlog.Debug("This is a debug message")
 	xlog.Info("This is an info message")
@@ -51,12 +57,7 @@ func TestRotatingFileHandler(t *testing.T) {
 		xlog.Info("This is a test log message", "index", i)
 	}
 
-	// Here you might want to add more specific checks, such as:
-	// - Verify that the log files were created
-	// - Check the size and number of log files
-	// - Ensure that old log files were deleted according to MaxAge
-
-	// For simplicity, we'll just check if the main log file exists
+	// Verify that the log file was created
 	_, err = os.Stat("test.log")
 	assert.NoError(err, "Log file should exist")
 
@@ -69,13 +70,16 @@ func TestRotatingFileHandler(t *testing.T) {
 
 func TestCatch(t *testing.T) {
 	assert := assert.New(t)
-
 	buf := &bytes.Buffer{}
-	handler := xlog.NewColorConsoleHandler(buf, nil)
-	xlog.Add(handler)
+	handler, err := xlog.NewColorConsoleHandler(buf, nil)
+	require.NoError(t, err, "NewColorConsoleHandler should not return an error")
+
+	// Create a new logger with the test handler
+	logger := slog.New(handler)
+	xlog.SetLogger(logger) // Assuming you have a SetLogger function in xlog package
 
 	xlog.Catch(func() error {
-		return fmt.Errorf("test error")
+		return xerror.New("test error")
 	})
 
 	output := buf.String()

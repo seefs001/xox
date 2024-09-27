@@ -10,7 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcolor"
+	"github.com/seefs001/xox/xerror"
 )
 
 var (
@@ -81,7 +83,7 @@ func (c *Command) Execute(ctx context.Context, args []string) error {
 	}
 
 	if err := c.Flags.Parse(args); err != nil {
-		return err
+		return xerror.Wrap(err, "failed to parse flags")
 	}
 
 	cmdCtx := &CommandContext{
@@ -96,10 +98,10 @@ func (c *Command) Execute(ctx context.Context, args []string) error {
 		if debugMode {
 			fmt.Printf("Command execution time: %v\n", time.Since(startTime))
 		}
-		return err
+		return xerror.Wrap(err, "command execution failed")
 	}
 
-	return fmt.Errorf("unknown command: %s", cmdName)
+	return xerror.Errorf("unknown command: %s", cmdName)
 }
 
 // PrintHelp prints the help message for the command and its subcommands.
@@ -122,7 +124,7 @@ func (c *Command) PrintHelp() {
 		c.Flags.VisitAll(func(f *flag.Flag) {
 			fmt.Fprintf(w, "  -%s\t%s\t(default: %s)\n", f.Name, f.Usage, f.DefValue)
 		})
-		w.Flush()
+		x.Must0(w.Flush())
 		fmt.Println()
 	}
 
@@ -149,7 +151,7 @@ func (c *Command) PrintHelp() {
 			}
 			fmt.Fprintf(w, "  %s\t%s%s\n", sub.Name, sub.Description, aliases)
 		}
-		w.Flush()
+		x.Must0(w.Flush())
 		fmt.Println()
 	}
 }

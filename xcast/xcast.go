@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/seefs001/xox/xerror"
 )
 
 // ToString converts various types to a string.
@@ -41,7 +43,7 @@ func ToString(value any) (string, error) {
 		for i := 0; i < v.Len(); i++ {
 			str, err := ToString(v.Index(i).Interface())
 			if err != nil {
-				return "", err
+				return "", xerror.Wrap(err, "failed to convert slice element to string")
 			}
 			strs[i] = str
 		}
@@ -49,19 +51,19 @@ func ToString(value any) (string, error) {
 	case reflect.Map, reflect.Struct:
 		jsonBytes, err := json.Marshal(value)
 		if err != nil {
-			return "", err
+			return "", xerror.Wrap(err, "failed to marshal value to JSON")
 		}
 		return string(jsonBytes), nil
 	}
 
-	return "", fmt.Errorf("unsupported type: %T", value)
+	return "", xerror.Errorf("unsupported type: %T", value)
 }
 
 // ToInt converts various types to an int.
 func ToInt(value any) (int, error) {
 	intVal, err := toInt64(value)
 	if err != nil {
-		return 0, err
+		return 0, xerror.Wrap(err, "failed to convert to int64")
 	}
 	return int(intVal), nil
 }
@@ -70,7 +72,7 @@ func ToInt(value any) (int, error) {
 func ToInt32(value any) (int32, error) {
 	intVal, err := toInt64(value)
 	if err != nil {
-		return 0, err
+		return 0, xerror.Wrap(err, "failed to convert to int64")
 	}
 	return int32(intVal), nil
 }
@@ -97,7 +99,7 @@ func toInt64(value any) (int64, error) {
 	case reflect.String:
 		intVal, err := strconv.ParseInt(v.String(), 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("cannot convert string to int64: %v", err)
+			return 0, xerror.Wrap(err, "failed to parse string as int64")
 		}
 		return intVal, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -105,7 +107,12 @@ func toInt64(value any) (int64, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return int64(v.Uint()), nil
 	case reflect.Float32, reflect.Float64:
-		return int64(v.Float()), nil
+		floatVal := v.Float()
+		intVal := int64(floatVal)
+		if floatVal != float64(intVal) {
+			return 0, xerror.Errorf("cannot convert %v to int64 without loss of precision", floatVal)
+		}
+		return intVal, nil
 	case reflect.Bool:
 		if v.Bool() {
 			return 1, nil
@@ -113,7 +120,7 @@ func toInt64(value any) (int64, error) {
 		return 0, nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return 0, fmt.Errorf("cannot convert byte slice to int64")
+			return 0, xerror.New("cannot convert byte slice to int64")
 		}
 		if v.Len() == 0 {
 			return 0, nil
@@ -122,16 +129,16 @@ func toInt64(value any) (int64, error) {
 	case reflect.Map, reflect.Struct:
 		jsonBytes, err := json.Marshal(value)
 		if err != nil {
-			return 0, err
+			return 0, xerror.Wrap(err, "failed to marshal value to JSON")
 		}
 		var result int64
 		if err := json.Unmarshal(jsonBytes, &result); err != nil {
-			return 0, err
+			return 0, xerror.Wrap(err, "failed to unmarshal JSON to int64")
 		}
 		return result, nil
 	}
 
-	return 0, fmt.Errorf("unsupported type: %T", value)
+	return 0, xerror.Errorf("unsupported type: %T", value)
 }
 
 // ToFloat64 converts various types to a float64.
@@ -152,7 +159,7 @@ func ToFloat64(value any) (float64, error) {
 	case reflect.String:
 		floatVal, err := strconv.ParseFloat(v.String(), 64)
 		if err != nil {
-			return 0.0, fmt.Errorf("cannot convert string to float64: %v", err)
+			return 0.0, xerror.Wrap(err, "failed to parse string as float64")
 		}
 		return floatVal, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -168,7 +175,7 @@ func ToFloat64(value any) (float64, error) {
 		return 0.0, nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return 0.0, fmt.Errorf("cannot convert byte slice to float64")
+			return 0.0, xerror.New("cannot convert byte slice to float64")
 		}
 		if v.Len() == 0 {
 			return 0.0, nil
@@ -177,16 +184,16 @@ func ToFloat64(value any) (float64, error) {
 	case reflect.Map, reflect.Struct:
 		jsonBytes, err := json.Marshal(value)
 		if err != nil {
-			return 0.0, err
+			return 0.0, xerror.Wrap(err, "failed to marshal value to JSON")
 		}
 		var result float64
 		if err := json.Unmarshal(jsonBytes, &result); err != nil {
-			return 0.0, err
+			return 0.0, xerror.Wrap(err, "failed to unmarshal JSON to float64")
 		}
 		return result, nil
 	}
 
-	return 0.0, fmt.Errorf("unsupported type: %T", value)
+	return 0.0, xerror.Errorf("unsupported type: %T", value)
 }
 
 // ToBool converts various types to a bool.
@@ -207,7 +214,7 @@ func ToBool(value any) (bool, error) {
 	case reflect.String:
 		boolVal, err := strconv.ParseBool(v.String())
 		if err != nil {
-			return false, fmt.Errorf("cannot convert string to bool: %v", err)
+			return false, xerror.Wrap(err, "failed to parse string as bool")
 		}
 		return boolVal, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -220,7 +227,7 @@ func ToBool(value any) (bool, error) {
 		return v.Bool(), nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return false, fmt.Errorf("cannot convert byte slice to bool")
+			return false, xerror.New("cannot convert byte slice to bool")
 		}
 		if v.Len() == 0 {
 			return false, nil
@@ -229,16 +236,16 @@ func ToBool(value any) (bool, error) {
 	case reflect.Map, reflect.Struct:
 		jsonBytes, err := json.Marshal(value)
 		if err != nil {
-			return false, err
+			return false, xerror.Wrap(err, "failed to marshal value to JSON")
 		}
 		var result bool
 		if err := json.Unmarshal(jsonBytes, &result); err != nil {
-			return false, err
+			return false, xerror.Wrap(err, "failed to unmarshal JSON to bool")
 		}
 		return result, nil
 	}
 
-	return false, fmt.Errorf("unsupported type: %T", value)
+	return false, xerror.Errorf("unsupported type: %T", value)
 }
 
 // ToMap converts various types to a map.
@@ -261,7 +268,7 @@ func ToMap(value any) (map[string]any, error) {
 		for _, key := range v.MapKeys() {
 			strKey, err := ToString(key.Interface())
 			if err != nil {
-				return nil, err
+				return nil, xerror.Wrap(err, "failed to convert map key to string")
 			}
 			result[strKey] = v.MapIndex(key).Interface()
 		}
@@ -282,7 +289,7 @@ func ToMap(value any) (map[string]any, error) {
 		return result, nil
 	}
 
-	return nil, fmt.Errorf("unsupported type: %T", value)
+	return nil, xerror.Errorf("unsupported type: %T", value)
 }
 
 // ToSlice converts various types to a slice.
@@ -320,7 +327,7 @@ func ToSlice(value any) ([]any, error) {
 		return result, nil
 	}
 
-	return nil, fmt.Errorf("unsupported type: %T", value)
+	return nil, xerror.Errorf("unsupported type: %T", value)
 }
 
 // ConvertStruct converts one struct to another, matching fields by name (case-insensitive).
@@ -333,7 +340,7 @@ func ConvertStruct(src any, dst any) error {
 	}
 
 	if srcVal.Kind() != reflect.Struct || dstVal.Kind() != reflect.Struct {
-		return fmt.Errorf("both src and dst must be structs")
+		return xerror.New("both src and dst must be structs")
 	}
 
 	srcType := srcVal.Type()

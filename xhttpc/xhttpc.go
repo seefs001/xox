@@ -6,16 +6,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/seefs001/xox/xcast"
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xlog"
 )
 
@@ -65,10 +65,10 @@ type LogOptions struct {
 }
 
 // ClientOption allows customizing the Client
-type ClientOption func(*Client)
+type ClientOption func(*Client) error
 
 // NewClient creates a new Client with default settings
-func NewClient(options ...ClientOption) *Client {
+func NewClient(options ...ClientOption) (*Client, error) {
 	c := &Client{
 		client: &http.Client{
 			Timeout: defaultTimeout,
@@ -108,41 +108,45 @@ func NewClient(options ...ClientOption) *Client {
 	c.headers.Set("Accept-Language", "en-US,en;q=0.9")
 
 	for _, option := range options {
-		option(c)
+		if err := option(c); err != nil {
+			return nil, xerror.Wrap(err, "failed to apply client option")
+		}
 	}
 
-	return c
+	return c, nil
 }
 
 // WithTimeout sets the client timeout
 func WithTimeout(timeout time.Duration) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.client.Timeout = timeout
+		return nil
 	}
 }
 
 // WithRetryConfig sets the retry configuration
 func WithRetryConfig(config RetryConfig) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.retryConfig = config
+		return nil
 	}
 }
 
 // WithUserAgent sets the User-Agent header for all requests
 func WithUserAgent(userAgent string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.userAgent = userAgent
 		c.headers.Set("User-Agent", userAgent)
+		return nil
 	}
 }
 
 // WithProxy sets a proxy for the client
 func WithProxy(proxyURL string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		proxy, err := url.Parse(proxyURL)
 		if err != nil {
-			xlog.Error("Failed to parse proxy URL", "error", err)
-			return
+			return xerror.Wrap(err, "failed to parse proxy URL")
 		}
 		transport, ok := c.client.Transport.(*http.Transport)
 		if !ok {
@@ -150,13 +154,15 @@ func WithProxy(proxyURL string) ClientOption {
 		}
 		transport.Proxy = http.ProxyURL(proxy)
 		c.client.Transport = transport
+		return nil
 	}
 }
 
 // WithDebug enables or disables debug mode
 func WithDebug(debug bool) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.debug = debug
+		return nil
 	}
 }
 
@@ -167,8 +173,9 @@ func (c *Client) SetDebug(debug bool) {
 
 // WithLogOptions sets the logging options for debug mode
 func WithLogOptions(options LogOptions) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.logOptions = options
+		return nil
 	}
 }
 
@@ -239,19 +246,33 @@ func (c *Client) SetBearerToken(token string) *Client {
 
 // AddQueryParam adds a query parameter for all requests
 func (c *Client) AddQueryParam(key string, value interface{}) *Client {
-	c.queryParams.Add(key, fmt.Sprintf("%v", value))
+	strValue, err := xcast.ToString(value)
+	if err != nil {
+		xlog.Warnf("Failed to convert value to string: %v", err)
+		return c
+	}
+	c.queryParams.Add(key, strValue)
 	return c
 }
 
 // AddFormDataField adds a form data field for all requests
 func (c *Client) AddFormDataField(key string, value interface{}) *Client {
-	c.formData.Add(key, fmt.Sprintf("%v", value))
+	strValue, err := xcast.ToString(value)
+	if err != nil {
+		xlog.Warnf("Failed to convert value to string: %v", err)
+		return c
+	}
+	c.formData.Add(key, strValue)
 	return c
 }
 
 // Request performs an HTTP request
 func (c *Client) Request(ctx context.Context, method, url string, body interface{}) (*http.Response, error) {
-	return c.doRequest(ctx, method, url, body)
+	resp, err := c.doRequest(ctx, method, url, body)
+	if err != nil {
+		return nil, xerror.Wrap(err, "request failed")
+	}
+	return resp, nil
 }
 
 // Get performs a GET request
@@ -300,7 +321,7 @@ func (c *Client) PostForm(url string, data url.Values) (resp *http.Response, err
 func (c *Client) PostJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal JSON body: %w", err)
+		return nil, xerror.Wrap(err, "failed to marshal JSON body")
 	}
 	return c.Post(ctx, url, bytes.NewReader(jsonBody))
 }
@@ -309,7 +330,7 @@ func (c *Client) PostJSON(ctx context.Context, url string, body interface{}) (*h
 func (c *Client) PutJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal JSON body: %w", err)
+		return nil, xerror.Wrap(err, "failed to marshal JSON body")
 	}
 	return c.Put(ctx, url, bytes.NewReader(jsonBody))
 }
@@ -318,7 +339,7 @@ func (c *Client) PutJSON(ctx context.Context, url string, body interface{}) (*ht
 func (c *Client) PatchJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal JSON body: %w", err)
+		return nil, xerror.Wrap(err, "failed to marshal JSON body")
 	}
 	return c.Patch(ctx, url, bytes.NewReader(jsonBody))
 }
@@ -334,7 +355,7 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 
 		req, err := c.createRequest(ctx, method, url, body)
 		if err != nil {
-			errChan <- fmt.Errorf("failed to create request: %w", err)
+			errChan <- xerror.Wrap(err, "failed to create request")
 			return
 		}
 
@@ -344,7 +365,7 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 
 		resp, err := c.client.Do(req)
 		if err != nil {
-			errChan <- fmt.Errorf("failed to send request: %w", err)
+			errChan <- xerror.Wrap(err, "failed to send request")
 			return
 		}
 		defer resp.Body.Close()
@@ -360,12 +381,13 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 				if err == io.EOF {
 					return
 				}
-				errChan <- fmt.Errorf("error reading stream: %w", err)
+				errChan <- xerror.Wrap(err, "error reading stream")
 				return
 			}
 
 			select {
 			case <-ctx.Done():
+				errChan <- xerror.Wrap(ctx.Err(), "context cancelled during streaming")
 				return
 			case responseChan <- line:
 			}
@@ -382,12 +404,11 @@ func (c *Client) doRequest(ctx context.Context, method, reqURL string, body inte
 	fullURL := c.baseURL + reqURL
 	req, err := c.createRequest(ctx, method, fullURL, body)
 	if err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to create request")
 	}
 
 	if c.debug {
 		c.logRequest(req)
-		// Set the start time before sending the request
 		ctx = context.WithValue(ctx, startTimeKey, time.Now())
 		req = req.WithContext(ctx)
 	}
@@ -395,25 +416,25 @@ func (c *Client) doRequest(ctx context.Context, method, reqURL string, body inte
 	var resp *http.Response
 	if c.retryConfig.Enabled {
 		operation := func() error {
-			var err error
-			resp, err = c.client.Do(req)
-			if err != nil {
-				return fmt.Errorf("failed to send request: %w", err)
+			var opErr error
+			resp, opErr = c.client.Do(req)
+			if opErr != nil {
+				return xerror.Wrap(opErr, "failed to send request")
 			}
 			if resp.StatusCode >= 500 {
-				return fmt.Errorf("server error: %d", resp.StatusCode)
+				return xerror.Newf("server error: %d", resp.StatusCode)
 			}
 			return nil
 		}
 
 		err = c.retryWithBackoff(ctx, operation)
 		if err != nil {
-			return nil, err
+			return nil, xerror.Wrap(err, "request failed after retries")
 		}
 	} else {
 		resp, err = c.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("failed to send request: %w", err)
+			return nil, xerror.Wrap(err, "failed to send request")
 		}
 	}
 
@@ -446,7 +467,7 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 		default:
 			jsonBody, err := json.Marshal(body)
 			if err != nil {
-				return nil, fmt.Errorf("failed to marshal request body: %w", err)
+				return nil, xerror.Wrap(err, "failed to marshal request body")
 			}
 			bodyReader = bytes.NewReader(jsonBody)
 			contentType = "application/json"
@@ -455,7 +476,7 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, xerror.Wrap(err, "failed to create request")
 	}
 
 	// Set method-specific headers
@@ -506,38 +527,31 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 }
 
 func (c *Client) retryWithBackoff(ctx context.Context, operation func() error) error {
-	var err error
+	var lastErr error
 	for i := 0; i < c.retryConfig.Count; i++ {
-		err = operation()
-		if err == nil {
+		if err := operation(); err == nil {
 			return nil
+		} else {
+			lastErr = err
 		}
 
 		if i == c.retryConfig.Count-1 {
 			break
 		}
 
-		backoffDuration := c.calculateBackoff(i)
+		backoffDuration := time.Duration(float64(c.retryConfig.MaxBackoff) * (1 - math.Exp(float64(-i))))
 		timer := time.NewTimer(backoffDuration)
 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return xerror.Wrap(ctx.Err(), "context cancelled during retry")
 		case <-timer.C:
 			// Continue to the next iteration
 		}
 	}
 
-	return fmt.Errorf("max retries reached: %w", err)
-}
-
-func (c *Client) calculateBackoff(attempt int) time.Duration {
-	backoff := float64(time.Second)
-	max := float64(c.retryConfig.MaxBackoff)
-	temp := math.Min(max, math.Pow(2, float64(attempt))*backoff)
-	backoff = temp/2 + rand.Float64()*(temp/2)
-	return time.Duration(backoff)
+	return xerror.Wrap(lastErr, "max retries reached")
 }
 
 func (c *Client) logRequest(req *http.Request) {
@@ -655,14 +669,16 @@ func basicAuth(username, password string) string {
 
 // WithBearerToken sets bearer auth token for all requests
 func WithBearerToken(token string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.SetBearerToken(token)
+		return nil
 	}
 }
 
 // WithBaseURL sets the base URL for all requests
 func WithBaseURL(url string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.SetBaseURL(url)
+		return nil
 	}
 }

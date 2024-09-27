@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcolor"
+	"github.com/seefs001/xox/xerror"
 )
 
 // Middleware defines the signature for middleware functions
@@ -63,31 +65,7 @@ func Logger(config ...LoggerConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].Format != "" {
-			cfg.Format = config[0].Format
-		}
-		if config[0].TimeFormat != "" {
-			cfg.TimeFormat = config[0].TimeFormat
-		}
-		if config[0].TimeZone != "" {
-			cfg.TimeZone = config[0].TimeZone
-		}
-		if config[0].TimeInterval != 0 {
-			cfg.TimeInterval = config[0].TimeInterval
-		}
-		if config[0].Output != nil {
-			cfg.Output = config[0].Output
-		}
-		if len(config[0].ExcludePaths) > 0 {
-			cfg.ExcludePaths = config[0].ExcludePaths
-		}
-		cfg.UseColor = config[0].UseColor
-		if config[0].LogHandler != nil {
-			cfg.LogHandler = config[0].LogHandler
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -102,64 +80,63 @@ func Logger(config ...LoggerConfig) Middleware {
 			next.ServeHTTP(ww, r)
 			duration := time.Since(start)
 
-			for _, path := range cfg.ExcludePaths {
-				if r.URL.Path == path {
-					return
-				}
+			if x.Contains(cfg.ExcludePaths, r.URL.Path) {
+				return
 			}
 
-			attrs := make(map[string]interface{})
-			attrs["time"] = time.Now().Format(cfg.TimeFormat)
-			attrs["ip"] = r.RemoteAddr
-			attrs["user_agent"] = r.UserAgent()
-			attrs["query"] = r.URL.RawQuery
-			attrs["body_size"] = r.ContentLength
-			attrs["status"] = ww.statusCode
-			attrs["latency"] = duration
-			attrs["method"] = r.Method
-			attrs["path"] = r.URL.Path
+			attrs := map[string]interface{}{
+				"time":       time.Now().Format(cfg.TimeFormat),
+				"ip":         r.RemoteAddr,
+				"user_agent": r.UserAgent(),
+				"query":      r.URL.RawQuery,
+				"body_size":  r.ContentLength,
+				"status":     ww.statusCode,
+				"latency":    duration,
+				"method":     r.Method,
+				"path":       r.URL.Path,
+			}
 
 			log := cfg.Format
 			for key, value := range attrs {
 				placeholder := "${" + key + "}"
 				stringValue := fmt.Sprintf("%v", value)
 				if cfg.UseColor && xcolor.IsColorEnabled() {
-					switch key {
-					case "status":
-						statusColor := xcolor.Green
-						if ww.statusCode >= 300 && ww.statusCode < 400 {
-							statusColor = xcolor.Yellow
-						} else if ww.statusCode >= 400 {
-							statusColor = xcolor.Red
-						}
-						stringValue = xcolor.Sprint(statusColor, stringValue)
-					case "latency":
-						stringValue = xcolor.Sprint(xcolor.Cyan, stringValue)
-					case "method":
-						stringValue = xcolor.Sprint(xcolor.Blue, stringValue)
-					case "path":
-						stringValue = xcolor.Sprint(xcolor.Purple, stringValue)
-					}
+					stringValue = colorizeLogValue(key, ww.statusCode, stringValue)
 				}
 				log = strings.Replace(log, placeholder, stringValue, 1)
 			}
 
-			if attrs["query"] != "" {
-				log = strings.Replace(log, "${query}", "?"+attrs["query"].(string), 1)
-			} else {
-				log = strings.Replace(log, "${query}", "", 1)
-			}
+			log = strings.Replace(log, "${query}", x.Ternary(attrs["query"] != "", "?"+attrs["query"].(string), ""), 1)
 
 			if cfg.LogHandler != nil {
 				cfg.LogHandler(log, attrs)
+			} else if cfg.UseColor {
+				xcolor.Print(xcolor.Reset, log)
 			} else {
-				if cfg.UseColor {
-					xcolor.Print(xcolor.Reset, log)
-				} else {
-					_, _ = cfg.Output.Write([]byte(log))
-				}
+				_, _ = cfg.Output.Write([]byte(log))
 			}
 		})
+	}
+}
+
+func colorizeLogValue(key string, statusCode int, value string) string {
+	switch key {
+	case "status":
+		statusColor := xcolor.Green
+		if statusCode >= 300 && statusCode < 400 {
+			statusColor = xcolor.Yellow
+		} else if statusCode >= 400 {
+			statusColor = xcolor.Red
+		}
+		return xcolor.Sprint(statusColor, value)
+	case "latency":
+		return xcolor.Sprint(xcolor.Cyan, value)
+	case "method":
+		return xcolor.Sprint(xcolor.Blue, value)
+	case "path":
+		return xcolor.Sprint(xcolor.Purple, value)
+	default:
+		return value
 	}
 }
 
@@ -181,18 +158,7 @@ func Recover(config ...RecoverConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].EnableStackTrace {
-			cfg.EnableStackTrace = config[0].EnableStackTrace
-		}
-		if config[0].StackTraceHandler != nil {
-			cfg.StackTraceHandler = config[0].StackTraceHandler
-		}
-		if config[0].ErrorLogger != nil {
-			cfg.ErrorLogger = config[0].ErrorLogger
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -233,18 +199,7 @@ func Timeout(config ...TimeoutConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].Timeout != 0 {
-			cfg.Timeout = config[0].Timeout
-		}
-		if config[0].TimeoutHandler != nil {
-			cfg.TimeoutHandler = config[0].TimeoutHandler
-		}
-		if config[0].ErrorLogger != nil {
-			cfg.ErrorLogger = config[0].ErrorLogger
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -300,27 +255,7 @@ func CORS(config ...CORSConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if len(config[0].AllowOrigins) > 0 {
-			cfg.AllowOrigins = config[0].AllowOrigins
-		}
-		if len(config[0].AllowMethods) > 0 {
-			cfg.AllowMethods = config[0].AllowMethods
-		}
-		if len(config[0].AllowHeaders) > 0 {
-			cfg.AllowHeaders = config[0].AllowHeaders
-		}
-		if config[0].AllowCredentials {
-			cfg.AllowCredentials = config[0].AllowCredentials
-		}
-		if len(config[0].ExposeHeaders) > 0 {
-			cfg.ExposeHeaders = config[0].ExposeHeaders
-		}
-		if config[0].MaxAge > 0 {
-			cfg.MaxAge = config[0].MaxAge
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -382,15 +317,7 @@ func Compress(config ...CompressConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].Level != 0 {
-			cfg.Level = config[0].Level
-		}
-		if config[0].MinSize > 0 {
-			cfg.MinSize = config[0].MinSize
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -417,47 +344,47 @@ func Compress(config ...CompressConfig) Middleware {
 	}
 }
 
-// RateLimitConfig defines the config for RateLimit middleware.
+// RateLimitConfig defines the configuration for the RateLimit middleware
 type RateLimitConfig struct {
-	Next     func(c *http.Request) bool
-	Max      int
-	Duration time.Duration
-	KeyFunc  func(*http.Request) string
+	Next       func(c *http.Request) bool
+	Max        int
+	Duration   time.Duration
+	Message    string
+	StatusCode int
+	KeyFunc    func(*http.Request) string
 }
 
 // RateLimit returns a middleware that limits the number of requests
 func RateLimit(config ...RateLimitConfig) Middleware {
 	cfg := RateLimitConfig{
-		Next:     nil,
-		Max:      100,
-		Duration: time.Minute,
-		KeyFunc: func(r *http.Request) string {
-			return r.RemoteAddr
-		},
+		Next:       nil,
+		Max:        100,
+		Duration:   time.Minute,
+		Message:    "Too many requests, please try again later.",
+		StatusCode: http.StatusTooManyRequests,
+		KeyFunc:    defaultKeyFunc,
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].Max > 0 {
-			cfg.Max = config[0].Max
-		}
-		if config[0].Duration > 0 {
-			cfg.Duration = config[0].Duration
-		}
-		if config[0].KeyFunc != nil {
-			cfg.KeyFunc = config[0].KeyFunc
-		}
+		cfg = config[0]
 	}
 
-	type limiter struct {
-		lastTime time.Time
-		tokens   int
+	// Ensure we have a valid key function
+	if cfg.KeyFunc == nil {
+		cfg.KeyFunc = defaultKeyFunc
 	}
 
-	limiters := make(map[string]*limiter)
-	mu := &sync.Mutex{}
+	// Ensure we have a valid status code
+	if cfg.StatusCode == 0 {
+		cfg.StatusCode = http.StatusTooManyRequests
+	}
+
+	type client struct {
+		count    int
+		lastSeen time.Time
+	}
+	clients := make(map[string]*client)
+	var mu sync.Mutex
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -468,33 +395,33 @@ func RateLimit(config ...RateLimitConfig) Middleware {
 
 			key := cfg.KeyFunc(r)
 			mu.Lock()
-			l, exists := limiters[key]
-			if !exists {
-				l = &limiter{lastTime: time.Now(), tokens: cfg.Max}
-				limiters[key] = l
+			if _, found := clients[key]; !found {
+				clients[key] = &client{count: 0, lastSeen: time.Now()}
 			}
 
-			now := time.Now()
-			elapsed := now.Sub(l.lastTime)
-			l.lastTime = now
-
-			l.tokens += int(elapsed.Seconds() * float64(cfg.Max) / cfg.Duration.Seconds())
-			if l.tokens > cfg.Max {
-				l.tokens = cfg.Max
+			c := clients[key]
+			if time.Since(c.lastSeen) > cfg.Duration {
+				c.count = 0
+				c.lastSeen = time.Now()
 			}
 
-			if l.tokens < 1 {
+			if c.count >= cfg.Max {
 				mu.Unlock()
-				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+				http.Error(w, cfg.Message, cfg.StatusCode)
 				return
 			}
 
-			l.tokens--
+			c.count++
 			mu.Unlock()
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// defaultKeyFunc generates a default key for rate limiting based on the request's RemoteAddr
+func defaultKeyFunc(r *http.Request) string {
+	return r.RemoteAddr
 }
 
 // BasicAuthConfig defines the config for BasicAuth middleware.
@@ -515,18 +442,7 @@ func BasicAuth(config ...BasicAuthConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if len(config[0].Users) > 0 {
-			cfg.Users = config[0].Users
-		}
-		if config[0].Realm != "" {
-			cfg.Realm = config[0].Realm
-		}
-		if config[0].AuthFunc != nil {
-			cfg.AuthFunc = config[0].AuthFunc
-		}
+		cfg = config[0]
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -580,10 +496,11 @@ func NewMemoryStore() *MemoryStore {
 func (m *MemoryStore) Get(sessionID string) (map[string]interface{}, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if session, ok := m.sessions[sessionID]; ok {
-		return session, nil
+	session, ok := m.sessions[sessionID]
+	if !ok {
+		return nil, xerror.New("session not found")
 	}
-	return nil, fmt.Errorf("session not found")
+	return session, nil
 }
 
 func (m *MemoryStore) Set(sessionID string, data map[string]interface{}) error {
@@ -685,21 +602,7 @@ func Session(config ...SessionConfig) Middleware {
 	}
 
 	if len(config) > 0 {
-		if config[0].Next != nil {
-			cfg.Next = config[0].Next
-		}
-		if config[0].Store != nil {
-			cfg.Store = config[0].Store
-		}
-		if config[0].CookieName != "" {
-			cfg.CookieName = config[0].CookieName
-		}
-		if config[0].MaxAge != 0 {
-			cfg.MaxAge = config[0].MaxAge
-		}
-		if config[0].SessionName != "" {
-			cfg.SessionName = config[0].SessionName
-		}
+		cfg = config[0]
 	}
 
 	sessionManager := NewSessionManager(cfg.Store, cfg.CookieName, cfg.MaxAge, cfg.SessionName)
@@ -711,12 +614,7 @@ func Session(config ...SessionConfig) Middleware {
 				return
 			}
 
-			var sessionID string
-			cookie, err := r.Cookie(cfg.CookieName)
-			if err == nil {
-				sessionID = cookie.Value
-			}
-
+			sessionID := getSessionID(r, cfg.CookieName)
 			if sessionID == "" {
 				sessionID = generateSessionID()
 				http.SetCookie(w, &http.Cookie{
@@ -727,8 +625,11 @@ func Session(config ...SessionConfig) Middleware {
 			}
 
 			session, err := cfg.Store.Get(sessionID)
-			if err != nil {
+			if xerror.Is(err, xerror.ErrNotFound) {
 				session = make(map[string]interface{})
+			} else if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
 			}
 
 			ctx := context.WithValue(r.Context(), cfg.SessionName, session)
@@ -737,9 +638,20 @@ func Session(config ...SessionConfig) Middleware {
 
 			next.ServeHTTP(w, r)
 
-			cfg.Store.Set(sessionID, session)
+			if err := cfg.Store.Set(sessionID, session); err != nil {
+				// Log the error, but don't interrupt the response
+				fmt.Printf("Error saving session: %v\n", err)
+			}
 		})
 	}
+}
+
+func getSessionID(r *http.Request, cookieName string) string {
+	cookie, err := r.Cookie(cookieName)
+	if err == nil {
+		return cookie.Value
+	}
+	return ""
 }
 
 func generateSessionID() string {

@@ -14,7 +14,8 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	client := NewClient()
+	client, err := NewClient()
+	require.NoError(t, err, "NewClient should not return an error")
 	assert.NotNil(t, client, "NewClient should not return nil")
 
 	assert.Equal(t, 3, client.retryConfig.Count, "Default retry count should be 3")
@@ -23,7 +24,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientOptions(t *testing.T) {
-	client := NewClient(
+	client, err := NewClient(
 		WithTimeout(5*time.Second),
 		WithRetryConfig(RetryConfig{
 			Count:      5,
@@ -31,6 +32,7 @@ func TestClientOptions(t *testing.T) {
 		}),
 		WithUserAgent("TestAgent"),
 	)
+	require.NoError(t, err, "NewClient should not return an error")
 
 	assert.Equal(t, 5*time.Second, client.client.Timeout, "Timeout should be 5s")
 	assert.Equal(t, 5, client.retryConfig.Count, "RetryCount should be 5")
@@ -57,7 +59,8 @@ func TestClientMethods(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient()
+	client, err := NewClient()
+	require.NoError(t, err, "NewClient should not return an error")
 
 	t.Run("GET", func(t *testing.T) {
 		resp, err := client.Get(context.Background(), server.URL)
@@ -113,10 +116,11 @@ func TestRetryWithBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(WithRetryConfig(RetryConfig{
+	client, err := NewClient(WithRetryConfig(RetryConfig{
 		Count:      3,
 		MaxBackoff: 100 * time.Millisecond,
 	}))
+	require.NoError(t, err, "NewClient should not return an error")
 
 	resp, err := client.Get(context.Background(), server.URL)
 	require.NoError(t, err, "Request should not fail")
@@ -133,7 +137,8 @@ func TestSetRequestHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient()
+	client, err := NewClient()
+	require.NoError(t, err, "NewClient should not return an error")
 	client.SetHeaders(map[string]string{
 		"X-Custom-Header": "test-value",
 	})
@@ -152,12 +157,13 @@ func TestContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient()
+	client, err := NewClient()
+	require.NoError(t, err, "NewClient should not return an error")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := client.Get(ctx, server.URL)
+	_, err = client.Get(ctx, server.URL)
 	assert.Error(t, err, "Expected error due to context cancellation")
-	assert.Equal(t, context.DeadlineExceeded, err, "Expected DeadlineExceeded error")
+	assert.Contains(t, err.Error(), "context deadline exceeded", "Expected DeadlineExceeded error")
 }

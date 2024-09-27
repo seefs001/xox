@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xhttpc"
+	"github.com/seefs001/xox/xlog"
 )
 
 // OpenAIClient represents a client for interacting with the OpenAI API
@@ -182,16 +184,7 @@ func WithBaseURL(url string) OpenAIClientOption {
 }
 
 func processBaseURL(url string) string {
-	// Remove trailing slash if present
-	url = strings.TrimSuffix(url, "/")
-
-	// Remove "/v1" suffix if present
-	url = strings.TrimSuffix(url, "/v1")
-
-	// Ensure the URL doesn't end with a slash
-	url = strings.TrimSuffix(url, "/")
-
-	return url
+	return x.TrimSuffixes(url, "/", "/v1")
 }
 
 // WithAPIKey sets the API key for authentication
@@ -226,9 +219,9 @@ func WithDebug(debug bool) OpenAIClientOption {
 func NewOpenAIClient(options ...OpenAIClientOption) *OpenAIClient {
 	client := &OpenAIClient{
 		baseURL: DefaultBaseURL,
-		httpClient: xhttpc.NewClient(
+		httpClient: x.Must1(xhttpc.NewClient(
 			xhttpc.WithTimeout(30 * time.Second),
-		),
+		)),
 		model: DefaultModel,
 		debug: false,
 	}
@@ -238,7 +231,6 @@ func NewOpenAIClient(options ...OpenAIClientOption) *OpenAIClient {
 	for _, option := range options {
 		option(client)
 	}
-	// handle base url
 	client.baseURL = processBaseURL(client.baseURL)
 
 	if client.debug {
@@ -263,11 +255,11 @@ func validateTextGenerationOptions(options *TextGenerationOptions) error {
 	hasPromptOrSystem := options.Prompt != "" || options.SystemPrompt != ""
 
 	if hasMessages && hasPromptOrSystem {
-		return fmt.Errorf("either 'Messages' or 'Prompt'/'SystemPrompt' should be provided, not both")
+		return xerror.New("either 'Messages' or 'Prompt'/'SystemPrompt' should be provided, not both")
 	}
 
 	if !hasMessages && !hasPromptOrSystem {
-		return fmt.Errorf("either 'Messages' or 'Prompt'/'SystemPrompt' must be provided")
+		return xerror.New("either 'Messages' or 'Prompt'/'SystemPrompt' must be provided")
 	}
 
 	return nil
@@ -276,7 +268,7 @@ func validateTextGenerationOptions(options *TextGenerationOptions) error {
 // GenerateText generates text based on the provided options
 func (c *OpenAIClient) GenerateText(ctx context.Context, options TextGenerationOptions) (string, error) {
 	if err := validateTextGenerationOptions(&options); err != nil {
-		return "", err
+		return "", xerror.Wrap(err, "invalid text generation options")
 	}
 
 	if x.IsEmpty(options.Model) {
@@ -288,36 +280,27 @@ func (c *OpenAIClient) GenerateText(ctx context.Context, options TextGenerationO
 		"messages": options.Messages,
 	}
 
-	// Only add non-default parameters
-	if options.Temperature != 0 {
-		requestBody["temperature"] = options.Temperature
-	}
-	if options.MaxTokens != 0 {
-		requestBody["max_tokens"] = options.MaxTokens
-	}
-	if options.TopP != 0 {
-		requestBody["top_p"] = options.TopP
-	}
-	if options.N != 0 {
-		requestBody["n"] = options.N
-	}
-	if options.IsStreaming {
-		requestBody["stream"] = options.IsStreaming
-	}
+	x.SetNonZeroValuesWithKeys(requestBody, map[string]interface{}{
+		"temperature": options.Temperature,
+		"max_tokens":  options.MaxTokens,
+		"top_p":       options.TopP,
+		"n":           options.N,
+		"stream":      options.IsStreaming,
+	})
 
 	resp, err := c.sendRequest(ctx, http.MethodPost, ChatCompletionsURL, requestBody, false)
 	if err != nil {
-		return "", err
+		return "", xerror.Wrap(err, "failed to send request")
 	}
 	defer resp.Body.Close()
 
 	var result ChatCompletionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("error decoding response: %w", err)
+		return "", xerror.Wrap(err, "error decoding response")
 	}
 
 	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices returned from API")
+		return "", xerror.New("no choices returned from API")
 	}
 
 	return result.Choices[0].Message.Content, nil
@@ -333,7 +316,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 		defer close(errChan)
 
 		if err := validateTextGenerationOptions(&options); err != nil {
-			errChan <- err
+			errChan <- xerror.Wrap(err, "invalid text generation options")
 			return
 		}
 
@@ -347,19 +330,12 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 			"stream":   true,
 		}
 
-		// Only add non-default parameters
-		if options.Temperature != 0 {
-			requestBody["temperature"] = options.Temperature
-		}
-		if options.MaxTokens != 0 {
-			requestBody["max_tokens"] = options.MaxTokens
-		}
-		if options.TopP != 0 {
-			requestBody["top_p"] = options.TopP
-		}
-		if options.N != 0 {
-			requestBody["n"] = options.N
-		}
+		x.SetNonZeroValuesWithKeys(requestBody, map[string]interface{}{
+			"temperature": options.Temperature,
+			"max_tokens":  options.MaxTokens,
+			"top_p":       options.TopP,
+			"n":           options.N,
+		})
 
 		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsURL, requestBody)
 
@@ -384,7 +360,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 			case err := <-responseErrChan:
 				flushBuffer()
 				if err != nil {
-					errChan <- err
+					errChan <- xerror.Wrap(err, "error in stream response")
 				}
 				return
 			case chunk := <-responseChan:
@@ -395,7 +371,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 				}
 				if !strings.HasPrefix(line, "data: ") {
 					flushBuffer()
-					errChan <- fmt.Errorf("unexpected line format: %s", line)
+					errChan <- xerror.Newf("unexpected line format: %s", line)
 					return
 				}
 
@@ -403,7 +379,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 				var streamResponse StreamResponse
 				if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
 					flushBuffer()
-					errChan <- fmt.Errorf("error unmarshaling stream data: %w", err)
+					errChan <- xerror.Wrap(err, "error unmarshaling stream data")
 					return
 				}
 
@@ -429,6 +405,10 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 	var resp *http.Response
 	var err error
 
+	if isMidjourney {
+		xlog.Debug("sending request to midjourney")
+	}
+
 	switch method {
 	case http.MethodGet:
 		resp, err = c.httpClient.
@@ -441,16 +421,16 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 			SetBearerToken(c.apiKey).
 			PostJSON(ctx, endpoint, body)
 	default:
-		return nil, fmt.Errorf("unsupported HTTP method: %s", method)
+		return nil, xerror.Newf("unsupported HTTP method: %s", method)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("error sending request: %w", err)
+		return nil, xerror.Wrap(err, "error sending request")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, xerror.Newf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return resp, nil
@@ -477,7 +457,7 @@ func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Resp
 					}
 					return
 				}
-				errChan <- fmt.Errorf("error reading stream: %w", err)
+				errChan <- xerror.Wrap(err, "error reading stream")
 				return
 			}
 
@@ -487,14 +467,14 @@ func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Resp
 			}
 
 			if !strings.HasPrefix(line, "data: ") {
-				errChan <- fmt.Errorf("unexpected line format: %s", line)
+				errChan <- xerror.Newf("unexpected line format: %s", line)
 				return
 			}
 
 			data := strings.TrimPrefix(line, "data: ")
 			var streamResponse StreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
-				errChan <- fmt.Errorf("error unmarshaling stream data: %w", err)
+				errChan <- xerror.Wrap(err, "error unmarshaling stream data")
 				return
 			}
 
@@ -585,13 +565,13 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, input []string, mod
 
 	resp, err := c.sendRequest(ctx, http.MethodPost, EmbeddingsURL, requestBody, false)
 	if err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to send embedding request")
 	}
 	defer resp.Body.Close()
 
 	var result EmbeddingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("error decoding response: %w", err)
+		return nil, xerror.Wrap(err, "error decoding embedding response")
 	}
 
 	embeddings := make([][]float64, len(result.Data))

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xhttpc"
 	"github.com/seefs001/xox/xlog"
 )
@@ -97,7 +98,7 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 	bot := &Bot{
 		token:          token,
 		baseURL:        "https://api.telegram.org",
-		client:         xhttpc.NewClient(),
+		client:         x.Must1(xhttpc.NewClient()),
 		errorHandler:   defaultErrorHandler,
 		requestTimeout: 30 * time.Second,
 		rateLimiter:    NewRateLimiter(0, 0), // Default to no rate limiting

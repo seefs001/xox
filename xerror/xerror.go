@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
-
-	"github.com/seefs001/xox/xlog"
 )
 
 // Error represents a custom error type that includes stack trace information
@@ -81,6 +80,12 @@ func Wrapf(err error, format string, args ...interface{}) *Error {
 // Newf creates a new Error with a formatted error message
 // Usage: err := xerror.Newf("failed to process item %d: %v", itemID, err)
 func Newf(format string, args ...interface{}) *Error {
+	return New(fmt.Sprintf(format, args...))
+}
+
+// Errorf creates a new Error with a formatted error message
+// Usage: err := xerror.Errorf("failed to process item %d: %v", itemID, err)
+func Errorf(format string, args ...interface{}) *Error {
 	return New(fmt.Sprintf(format, args...))
 }
 
@@ -237,22 +242,6 @@ func Retry(attempts int, sleep time.Duration, f func() error) (err error) {
 	}
 }
 
-// LogError logs the error with its stack trace using xlog
-// Usage: xerror.LogError(err)
-func LogError(err error) {
-	if xerr, ok := err.(*Error); ok {
-		xlog.Error("Error occurred",
-			"message", xerr.Err.Error(),
-			"code", xerr.Code,
-			"timestamp", xerr.Timestamp,
-			"stack", xerr.Stack,
-			"context", xerr.Context,
-		)
-	} else {
-		xlog.Error("Error occurred", "error", err.Error())
-	}
-}
-
 // MustNoError panics if the given error is not nil, otherwise returns the value
 // Usage: result := xerror.MustNoError(someFunction())
 func MustNoError[T any](value T, err error) T {
@@ -328,9 +317,106 @@ func IsErrorCode(err error, code ErrorCode) bool {
 	return false
 }
 
-// LogErrorAndReturn logs the error and returns it
-// Usage: return xerror.LogErrorAndReturn(err)
-func LogErrorAndReturn(err error) error {
-	LogError(err)
-	return err
+// MustWrap wraps an error if it's not nil, otherwise returns nil
+// Usage: err = xerror.MustWrap(someFunction())
+func MustWrap(err error, msg string) *Error {
+	if err == nil {
+		return nil
+	}
+	return Wrap(err, msg)
+}
+
+// MustWrapf wraps an error with a formatted message if it's not nil, otherwise returns nil
+// Usage: err = xerror.MustWrapf(someFunction(), "failed to process %s", item)
+func MustWrapf(err error, format string, args ...interface{}) *Error {
+	if err == nil {
+		return nil
+	}
+	return Wrapf(err, format, args...)
+}
+
+// WrapWithStackTrace wraps an error and includes a full stack trace
+// Usage: err = xerror.WrapWithStackTrace(err, "operation failed")
+func WrapWithStackTrace(err error, msg string) *Error {
+	if err == nil {
+		return nil
+	}
+	return &Error{
+		Err:       fmt.Errorf("%s: %w", msg, err),
+		Stack:     string(debug.Stack()),
+		Timestamp: time.Now(),
+		Code:      0,
+		Context:   make(map[string]interface{}),
+	}
+}
+
+// NewWithStackTrace creates a new error with a full stack trace
+// Usage: err := xerror.NewWithStackTrace("operation failed")
+func NewWithStackTrace(msg string) *Error {
+	return &Error{
+		Err:       errors.New(msg),
+		Stack:     string(debug.Stack()),
+		Timestamp: time.Now(),
+		Code:      0,
+		Context:   make(map[string]interface{}),
+	}
+}
+
+// WrapIfNotNil wraps an error only if it's not nil, otherwise returns nil
+// Usage: err = xerror.WrapIfNotNil(err, "operation failed")
+func WrapIfNotNil(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+	return Wrap(err, msg)
+}
+
+// IsType checks if an error is of a specific type
+// Usage: if xerror.IsType[*CustomError](err) { ... }
+func IsType[T error](err error) bool {
+	var target T
+	return As(err, &target)
+}
+
+// MapError applies a function to an error if it's not nil
+// Usage: err = xerror.MapError(err, func(e error) error { return fmt.Errorf("wrapped: %w", e) })
+func MapError(err error, f func(error) error) error {
+	if err == nil {
+		return nil
+	}
+	return f(err)
+}
+
+// CombineErrors combines multiple errors into a single error
+// Usage: err := xerror.CombineErrors(err1, err2, err3)
+func CombineErrors(errs ...error) error {
+	var nonNilErrs []error
+	for _, err := range errs {
+		if err != nil {
+			nonNilErrs = append(nonNilErrs, err)
+		}
+	}
+	if len(nonNilErrs) == 0 {
+		return nil
+	}
+	return Join(nonNilErrs...)
+}
+
+// WithFields adds multiple context fields to an error
+// Usage: err = xerror.WithFields(err, map[string]interface{}{"user_id": 123, "action": "login"})
+func WithFields(err error, fields map[string]interface{}) *Error {
+	if xerr, ok := err.(*Error); ok {
+		for k, v := range fields {
+			xerr.Context[k] = v
+		}
+		return xerr
+	}
+	xerr := &Error{
+		Err:       err,
+		Stack:     getStack(),
+		Timestamp: time.Now(),
+		Code:      int(GetErrorCode(err)),
+		Context:   fields,
+	}
+	return xerr
 }

@@ -5,36 +5,33 @@ import (
 	"reflect"
 	"sync"
 
+	"strings"
+
 	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xlog"
 )
 
 func generateServiceName[T any]() string {
 	var t T
-
-	// struct
 	name := fmt.Sprintf("%T", t)
 	if name != "<nil>" {
 		return name
 	}
-
-	// interface
 	return fmt.Sprintf("%T", new(T))
 }
 
 type Container struct {
-	mu       sync.RWMutex
-	services map[string]any
-
+	mu              sync.RWMutex
+	services        map[string]any
 	invokedServices map[string]bool
-
-	logf func(format string, args ...any)
+	logf            func(format string, args ...any)
 }
 
 var defaultContainer = &Container{
 	services:        make(map[string]any),
 	invokedServices: make(map[string]bool),
-	logf:            func(format string, args ...any) {}, // Default no-op logger
+	logf:            func(format string, args ...any) {},
 }
 
 func NewContainer() *Container {
@@ -106,7 +103,7 @@ func InvokeNamed[T any](c *Container, name string) (T, error) {
 
 	if !exists {
 		var zero T
-		return zero, fmt.Errorf("service %s not found", serviceName)
+		return zero, xerror.Errorf("service %s not found", serviceName)
 	}
 
 	c.mu.Lock()
@@ -120,7 +117,6 @@ func InvokeNamed[T any](c *Container, name string) (T, error) {
 		c.mu.Unlock()
 	}
 
-	// Check if the service type matches the requested type
 	if reflect.TypeOf(service) != reflect.TypeOf((*T)(nil)).Elem() {
 		if c.logf != nil {
 			c.logf("Warning: Service %s type mismatch. Expected %T, got %T", serviceName, *new(T), service)
@@ -199,10 +195,9 @@ func injectStructNamedRecursive(c *Container, v reflect.Value, fieldNames map[st
 
 		tag := fieldType.Tag.Get("xd")
 		if tag != "-" {
-			// If the field is a struct or pointer to struct, recursively inject
 			if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
 				if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {
-					return err
+					return xerror.Wrap(err, "failed to inject nested struct")
 				}
 			}
 			continue
@@ -220,7 +215,7 @@ func injectStructNamedRecursive(c *Container, v reflect.Value, fieldNames map[st
 		c.mu.RUnlock()
 
 		if !exists {
-			return fmt.Errorf("service %s not found for field %s", serviceName, fieldType.Name)
+			return xerror.Errorf("service %s not found for field %s", serviceName, fieldType.Name)
 		}
 
 		serviceValue := reflect.ValueOf(service)
@@ -232,36 +227,25 @@ func injectStructNamedRecursive(c *Container, v reflect.Value, fieldNames map[st
 			} else if field.Kind() != reflect.Ptr && serviceValue.Kind() == reflect.Ptr {
 				serviceValue = serviceValue.Elem()
 			} else {
-				return fmt.Errorf("incompatible types for field %s: expected %v, got %v",
+				return xerror.Errorf("incompatible types for field %s: expected %v, got %v",
 					fieldType.Name, field.Type(), serviceValue.Type())
 			}
 		}
 
 		if !field.CanSet() {
-			return fmt.Errorf("cannot set field %s", fieldType.Name)
+			return xerror.Errorf("cannot set field %s", fieldType.Name)
 		}
 
 		field.Set(serviceValue)
 
-		// Recursively inject for struct fields
 		if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
 			if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {
-				return err
+				return xerror.Wrap(err, "failed to inject nested struct")
 			}
 		}
 	}
 
 	return nil
-}
-
-// HasService checks if a service of the specified type is registered in the container.
-func (c *Container) HasService(serviceType reflect.Type) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	serviceName := serviceType.String()
-	_, exists := c.services[serviceName]
-	return exists
 }
 
 // RemoveService removes a service of the specified type from the container.
@@ -270,11 +254,29 @@ func (c *Container) RemoveService(serviceType reflect.Type) {
 	defer c.mu.Unlock()
 
 	serviceName := serviceType.String()
-	delete(c.services, serviceName)
-	delete(c.invokedServices, serviceName)
-	if c.logf != nil {
-		c.logf("Service %s removed", serviceName)
+	for key := range c.services {
+		if strings.HasPrefix(key, serviceName) {
+			delete(c.services, key)
+			delete(c.invokedServices, key)
+			if c.logf != nil {
+				c.logf("Service %s removed", key)
+			}
+		}
 	}
+}
+
+// HasService checks if a service of the specified type is registered in the container.
+func (c *Container) HasService(serviceType reflect.Type) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	serviceName := serviceType.String()
+	for key := range c.services {
+		if key == serviceName || strings.HasPrefix(key, serviceName+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // Clear removes all services from the container.
@@ -295,12 +297,8 @@ func (c *Container) Clone() *Container {
 	defer c.mu.RUnlock()
 
 	newContainer := NewContainer()
-	for serviceName, service := range c.services {
-		newContainer.services[serviceName] = service
-	}
-	for serviceName, invoked := range c.invokedServices {
-		newContainer.invokedServices[serviceName] = invoked
-	}
+	newContainer.services = x.CopyMap(c.services)
+	newContainer.invokedServices = x.CopyMap(c.invokedServices)
 	newContainer.logf = c.logf
 
 	if c.logf != nil {
@@ -327,5 +325,22 @@ func (c *Container) SetNamedService(name string, service any) {
 	c.services[serviceName] = service
 	if c.logf != nil {
 		c.logf("Service %s set directly", serviceName)
+	}
+}
+
+// RemoveNamedService removes a named service of the specified type from the container.
+func (c *Container) RemoveNamedService(serviceType reflect.Type, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	serviceName := serviceType.String()
+	if name != "" {
+		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+	}
+
+	delete(c.services, serviceName)
+	delete(c.invokedServices, serviceName)
+	if c.logf != nil {
+		c.logf("Named service %s removed", serviceName)
 	}
 }

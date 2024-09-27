@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcolor"
+	"github.com/seefs001/xox/xerror"
 )
 
 var (
@@ -20,7 +22,7 @@ var (
 	defaultHandler slog.Handler
 	logConfig      LogConfig
 	defaultLevel   slog.Level
-	handlers       []slog.Handler // Add this line
+	handlers       []slog.Handler
 )
 
 // LogConfig represents the configuration for logging.
@@ -31,13 +33,13 @@ type LogConfig struct {
 
 func init() {
 	logConfig = LogConfig{
-		IncludeFileAndLine: true,           // Default to including file and line
-		Level:              slog.LevelInfo, // Default log level
+		IncludeFileAndLine: true,
+		Level:              slog.LevelInfo,
 	}
 	defaultLevel = logConfig.Level
-	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLevel,
-	})
+	}))
 	defaultLogger = slog.New(defaultHandler)
 }
 
@@ -45,18 +47,18 @@ func init() {
 func SetLogConfig(config LogConfig) {
 	logConfig = config
 	defaultLevel = config.Level
-	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLevel,
-	})
+	}))
 	defaultLogger = slog.New(defaultHandler)
 }
 
 // SetDefaultLogLevel sets the default logging level.
 func SetDefaultLogLevel(level slog.Level) {
 	defaultLevel = level
-	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLevel,
-	})
+	}))
 	defaultLogger = slog.New(defaultHandler)
 }
 
@@ -106,7 +108,8 @@ func log(level slog.Level, msg string, args ...any) {
 		_, file, line, ok := runtime.Caller(2)
 		if ok {
 			// Use relative path for file
-			if rel, err := filepath.Rel(filepath.Dir(file), file); err == nil {
+			rel, err := filepath.Rel(filepath.Dir(file), file)
+			if err == nil {
 				file = rel
 			}
 			// Format file:line to be clickable in most IDEs
@@ -126,7 +129,7 @@ type ColorConsoleHandler struct {
 }
 
 // NewColorConsoleHandler creates a new ColorConsoleHandler.
-func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) *ColorConsoleHandler {
+func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) (*ColorConsoleHandler, error) {
 	if opts == nil {
 		opts = &slog.HandlerOptions{
 			Level: defaultLevel,
@@ -135,7 +138,7 @@ func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) *ColorConsol
 	return &ColorConsoleHandler{
 		w:    w,
 		opts: opts,
-	}
+	}, nil
 }
 
 // Handle handles the log record with color output.
@@ -179,7 +182,7 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	_, err := fmt.Fprintf(h.w, "%s [%s] %s%s%s\n", timeStr, level, prefix, msg, attrStr)
-	return err
+	return xerror.Wrap(err, "failed to write log message")
 }
 
 // Enabled implements the slog.Handler interface.
@@ -203,7 +206,7 @@ func (h *ColorConsoleHandler) WithGroup(name string) slog.Handler {
 
 // Add adds a new handler to the existing handlers
 func Add(handler slog.Handler) {
-	handlers = append(handlers, handler) // Update this line
+	handlers = append(handlers, handler)
 	if mh, ok := defaultHandler.(*MultiHandler); ok {
 		// If defaultHandler is already a MultiHandler, add the new handler to it
 		mh.handlers = append(mh.handlers, handler)
@@ -236,10 +239,14 @@ func (h *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 // Handle implements the Handler interface
 func (h *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
 	for _, handler := range h.handlers {
 		if err := handler.Handle(ctx, r); err != nil {
-			return err
+			errs = append(errs, err)
 		}
+	}
+	if len(errs) > 0 {
+		return xerror.Wrap(errs[0], "failed to handle log record")
 	}
 	return nil
 }
@@ -288,7 +295,7 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 		lastRotate: time.Now(),
 	}
 	if err := h.rotate(); err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to rotate log file")
 	}
 	h.Handler = slog.NewJSONHandler(h.file, &slog.HandlerOptions{Level: config.Level})
 	return h, nil
@@ -301,13 +308,13 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	if h.size >= h.config.MaxSize || time.Since(h.lastRotate) >= 24*time.Hour {
 		if err := h.rotate(); err != nil {
-			return err
+			return xerror.Wrap(err, "failed to rotate log file")
 		}
 	}
 
 	err := h.Handler.Handle(ctx, r)
 	if err != nil {
-		return err
+		return xerror.Wrap(err, "failed to handle log record")
 	}
 
 	// Estimate the size increase
@@ -319,21 +326,27 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 // rotate rotates the log file.
 func (h *RotatingFileHandler) rotate() error {
 	if h.file != nil {
-		h.file.Close()
+		if err := h.file.Close(); err != nil {
+			return xerror.Wrap(err, "failed to close log file")
+		}
 	}
 
 	// Rotate existing files
 	for i := h.config.MaxBackups - 1; i > 0; i-- {
 		oldName := fmt.Sprintf("%s.%d", h.config.Filename, i)
 		newName := fmt.Sprintf("%s.%d", h.config.Filename, i+1)
-		os.Rename(oldName, newName)
+		if err := os.Rename(oldName, newName); err != nil && !os.IsNotExist(err) {
+			return xerror.Wrap(err, "failed to rename log file")
+		}
 	}
-	os.Rename(h.config.Filename, h.config.Filename+".1")
+	if err := os.Rename(h.config.Filename, h.config.Filename+".1"); err != nil && !os.IsNotExist(err) {
+		return xerror.Wrap(err, "failed to rename current log file")
+	}
 
 	// Open new file
 	file, err := os.OpenFile(h.config.Filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
-		return err
+		return xerror.Wrap(err, "failed to open new log file")
 	}
 
 	h.file = file
@@ -343,15 +356,20 @@ func (h *RotatingFileHandler) rotate() error {
 	// Remove old files
 	if h.config.MaxAge > 0 {
 		cutoff := time.Now().Add(-time.Duration(h.config.MaxAge) * 24 * time.Hour)
-		filepath.Walk(filepath.Dir(h.config.Filename), func(path string, info os.FileInfo, err error) error {
+		err := filepath.Walk(filepath.Dir(h.config.Filename), func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if !info.IsDir() && info.ModTime().Before(cutoff) {
-				os.Remove(path)
+				if err := os.Remove(path); err != nil {
+					return xerror.Wrap(err, "failed to remove old log file")
+				}
 			}
 			return nil
 		})
+		if err != nil {
+			return xerror.Wrap(err, "failed to remove old log files")
+		}
 	}
 
 	return nil
@@ -361,7 +379,7 @@ func (h *RotatingFileHandler) rotate() error {
 func AddRotatingFile(config FileConfig) error {
 	handler, err := NewRotatingFileHandler(config)
 	if err != nil {
-		return err
+		return xerror.Wrap(err, "failed to create rotating file handler")
 	}
 
 	var newHandler slog.Handler
@@ -386,16 +404,29 @@ func Catch(f func() error) {
 	}
 }
 
-// Add this interface if it doesn't exist
+// ShutdownHandler is an interface for handlers that need to be shut down.
 type ShutdownHandler interface {
-	Shutdown()
+	Shutdown() error
 }
 
-// Add a function to shutdown all handlers
-func Shutdown() {
+// Shutdown shuts down all handlers that implement the ShutdownHandler interface.
+func Shutdown() error {
+	var errs []error
 	for _, handler := range handlers {
 		if sh, ok := handler.(ShutdownHandler); ok {
-			sh.Shutdown()
+			if err := sh.Shutdown(); err != nil {
+				errs = append(errs, xerror.Wrap(err, "failed to shutdown handler"))
+			}
 		}
 	}
+	if len(errs) > 0 {
+		return xerror.Wrap(errs[0], "failed to shutdown one or more handlers")
+	}
+	return nil
+}
+
+// SetLogger sets the default logger
+func SetLogger(logger *slog.Logger) {
+	defaultLogger = logger
+	defaultHandler = logger.Handler()
 }

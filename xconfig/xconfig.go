@@ -2,13 +2,15 @@ package xconfig
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcast"
+	"github.com/seefs001/xox/xerror"
+	"github.com/seefs001/xox/xlog"
 )
 
 // Config holds the configuration values.
@@ -31,7 +33,7 @@ func NewConfig() *Config {
 func (c *Config) LoadFromJSON(jsonStr string) error {
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &jsonData); err != nil {
-		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+		return xerror.Wrap(err, "failed to unmarshal JSON")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -72,14 +74,14 @@ func WithEnvFile(filePath string) func(*Config) {
 		defer c.mu.Unlock()
 		file, err := os.Open(filePath)
 		if err != nil {
-			fmt.Printf("failed to open env file: %v\n", err)
+			xlog.Error("failed to open env file: %v", err)
 			return
 		}
 		defer file.Close()
 
 		var jsonData map[string]any
 		if err := json.NewDecoder(file).Decode(&jsonData); err != nil {
-			fmt.Printf("failed to decode env file: %v\n", err)
+			xlog.Error("failed to decode env file: %v", err)
 			return
 		}
 
@@ -89,70 +91,49 @@ func WithEnvFile(filePath string) func(*Config) {
 
 // GetInt retrieves a value by key and converts it to an int.
 func (c *Config) GetInt(key string) (int, error) {
-	c.mu.RLock()
-	value, exists := c.data[key]
-	c.mu.RUnlock()
-	if !exists {
-		return 0, fmt.Errorf("key %s not found", key)
-	}
-
-	result, err := xcast.ToInt(value)
+	value, err := c.get(key)
 	if err != nil {
-		return 0, fmt.Errorf("failed to convert value to int: %w", err)
+		return 0, err
 	}
-
-	return result, nil
+	return xcast.ToInt(value)
 }
 
 // GetInt32 retrieves a value by key and converts it to an int32.
 func (c *Config) GetInt32(key string) (int32, error) {
-	c.mu.RLock()
-	value, exists := c.data[key]
-	c.mu.RUnlock()
-	if !exists {
-		return 0, fmt.Errorf("key %s not found", key)
-	}
-
-	result, err := xcast.ToInt32(value)
+	value, err := c.get(key)
 	if err != nil {
-		return 0, fmt.Errorf("failed to convert value to int32: %w", err)
+		return 0, err
 	}
-
-	return result, nil
+	return xcast.ToInt32(value)
 }
 
 // GetString retrieves a value by key and converts it to a string.
 func (c *Config) GetString(key string) (string, error) {
-	c.mu.RLock()
-	value, exists := c.data[key]
-	c.mu.RUnlock()
-	if !exists {
-		return "", fmt.Errorf("key %s not found", key)
-	}
-
-	result, err := xcast.ToString(value)
+	value, err := c.get(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to convert value to string: %w", err)
+		return "", err
 	}
-
-	return result, nil
+	return xcast.ToString(value)
 }
 
 // GetBool retrieves a value by key and converts it to a bool.
 func (c *Config) GetBool(key string) (bool, error) {
-	c.mu.RLock()
-	value, exists := c.data[key]
-	c.mu.RUnlock()
-	if !exists {
-		return false, fmt.Errorf("key %s not found", key)
-	}
-
-	result, err := xcast.ToBool(value)
+	value, err := c.get(key)
 	if err != nil {
-		return false, fmt.Errorf("failed to convert value to bool: %w", err)
+		return false, err
 	}
+	return xcast.ToBool(value)
+}
 
-	return result, nil
+// get retrieves a value by key.
+func (c *Config) get(key string) (any, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	value, exists := c.data[key]
+	if !exists {
+		return nil, xerror.Errorf("key %s not found", key)
+	}
+	return value, nil
 }
 
 // Put sets a value by key.
@@ -170,7 +151,7 @@ func (c *Config) LoadFromStruct(s any) error {
 	}
 
 	if v.Kind() != reflect.Struct {
-		return fmt.Errorf("input must be a struct")
+		return xerror.New("input must be a struct")
 	}
 
 	t := v.Type()
@@ -210,7 +191,7 @@ func (c *Config) LoadFromStringMap(data map[string]string) {
 func (c *Config) GetAll() map[string]any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.data
+	return x.CopyMap(c.data)
 }
 
 // FlattenMap flattens a nested map into a single-level map with dot notation keys.

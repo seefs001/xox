@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"reflect"
-	"strconv"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xerror"
 )
 
 // ResponseWriter wraps http.ResponseWriter to provide additional functionality
@@ -22,7 +25,13 @@ type ResponseWriter struct {
 // WriteJSON writes JSON response
 func (w *ResponseWriter) WriteJSON(v interface{}) error {
 	w.Header().Set("Content-Type", "application/json")
-	return json.NewEncoder(w).Encode(v)
+	return xerror.Wrap(json.NewEncoder(w).Encode(v), "error encoding JSON response")
+}
+
+// WriteXML writes XML response
+func (w *ResponseWriter) WriteXML(v interface{}) error {
+	w.Header().Set("Content-Type", "application/xml")
+	return xerror.Wrap(xml.NewEncoder(w).Encode(v), "error encoding XML response")
 }
 
 // Context is a custom context type that includes request and response writer
@@ -45,6 +54,20 @@ func (c *Context) JSON(code int, v interface{}) error {
 	return c.Writer.WriteJSON(v)
 }
 
+// XML sends an XML response
+func (c *Context) XML(code int, v interface{}) error {
+	c.Writer.StatusCode = code
+	return c.Writer.WriteXML(v)
+}
+
+// String sends a string response
+func (c *Context) String(code int, format string, values ...interface{}) error {
+	c.Writer.Header().Set("Content-Type", "text/plain")
+	c.Writer.WriteHeader(code)
+	_, err := c.Writer.Write([]byte(fmt.Sprintf(format, values...)))
+	return xerror.Wrap(err, "error writing string response")
+}
+
 // GetParam retrieves a URL parameter
 func (c *Context) GetParam(key string) string {
 	return c.Request.URL.Query().Get(key)
@@ -52,12 +75,22 @@ func (c *Context) GetParam(key string) string {
 
 // GetParamInt retrieves a URL parameter as an integer
 func (c *Context) GetParamInt(key string) (int, error) {
-	return strconv.Atoi(c.GetParam(key))
+	return x.StringToInt(c.GetParam(key))
+}
+
+// GetParamInt64 retrieves a URL parameter as an int64
+func (c *Context) GetParamInt64(key string) (int64, error) {
+	return x.StringToInt64(c.GetParam(key))
 }
 
 // GetParamFloat retrieves a URL parameter as a float64
 func (c *Context) GetParamFloat(key string) (float64, error) {
-	return strconv.ParseFloat(c.GetParam(key), 64)
+	return x.StringToFloat64(c.GetParam(key))
+}
+
+// GetParamBool retrieves a URL parameter as a boolean
+func (c *Context) GetParamBool(key string) bool {
+	return x.StringToBool(c.GetParam(key))
 }
 
 // GetHeader retrieves a header value
@@ -82,17 +115,18 @@ func (c *Context) WithValue(key, val interface{}) {
 
 // GetBody decodes the request body into the provided interface
 func (c *Context) GetBody(v interface{}) error {
-	return json.NewDecoder(c.Request.Body).Decode(v)
+	return xerror.Wrap(json.NewDecoder(c.Request.Body).Decode(v), "error decoding request body")
 }
 
 // GetBodyRaw returns the raw request body as a byte slice
 func (c *Context) GetBodyRaw() ([]byte, error) {
-	return io.ReadAll(c.Request.Body)
+	body, err := io.ReadAll(c.Request.Body)
+	return body, xerror.Wrap(err, "error reading raw request body")
 }
 
 // GetBodyXML decodes the request body as XML into the provided interface
 func (c *Context) GetBodyXML(v interface{}) error {
-	return xml.NewDecoder(c.Request.Body).Decode(v)
+	return xerror.Wrap(xml.NewDecoder(c.Request.Body).Decode(v), "error decoding XML request body")
 }
 
 // GetFormValue retrieves a form value
@@ -102,12 +136,13 @@ func (c *Context) GetFormValue(key string) string {
 
 // GetFormFile retrieves a file from a multipart form
 func (c *Context) GetFormFile(key string) (multipart.File, *multipart.FileHeader, error) {
-	return c.Request.FormFile(key)
+	file, header, err := c.Request.FormFile(key)
+	return file, header, xerror.Wrap(err, "error getting form file")
 }
 
 // ParseMultipartForm parses a multipart form
 func (c *Context) ParseMultipartForm(maxMemory int64) error {
-	return c.Request.ParseMultipartForm(maxMemory)
+	return xerror.Wrap(c.Request.ParseMultipartForm(maxMemory), "error parsing multipart form")
 }
 
 // GetQueryParams retrieves all query parameters
@@ -118,7 +153,7 @@ func (c *Context) GetQueryParams() map[string][]string {
 // GetBodyForm parses the request body as a form and returns the values
 func (c *Context) GetBodyForm() (map[string][]string, error) {
 	if err := c.Request.ParseForm(); err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "error parsing form")
 	}
 	return c.Request.PostForm, nil
 }
@@ -135,7 +170,8 @@ func (c *Context) SetCookie(cookie *http.Cookie) {
 
 // GetCookie retrieves a cookie
 func (c *Context) GetCookie(name string) (*http.Cookie, error) {
-	return c.Request.Cookie(name)
+	cookie, err := c.Request.Cookie(name)
+	return cookie, xerror.Wrap(err, "error getting cookie")
 }
 
 // Handler defines the handler function signature
@@ -158,14 +194,14 @@ func WrapHTTP(h http.HandlerFunc) Handler {
 // Bind binds data from multiple sources (query, form, JSON body) to a struct based on tags
 func (c *Context) Bind(v interface{}) error {
 	if err := c.bindQuery(v); err != nil {
-		return err
+		return xerror.Wrap(err, "error binding query parameters")
 	}
 	if err := c.bindForm(v); err != nil {
-		return err
+		return xerror.Wrap(err, "error binding form data")
 	}
 	if c.Request.Header.Get("Content-Type") == "application/json" {
 		if err := c.GetBody(v); err != nil {
-			return err
+			return xerror.Wrap(err, "error binding JSON body")
 		}
 	}
 	return nil
@@ -177,119 +213,197 @@ func (c *Context) bindQuery(v interface{}) error {
 
 func (c *Context) bindForm(v interface{}) error {
 	if err := c.Request.ParseForm(); err != nil {
-		return err
+		return xerror.Wrap(err, "error parsing form")
 	}
 	return c.bindData(v, c.Request.Form)
 }
 
 func (c *Context) bindData(v interface{}, data map[string][]string) error {
-	typ := reflect.TypeOf(v)
-	val := reflect.ValueOf(v)
-
-	if typ.Kind() == reflect.Ptr {
-		typ = typ.Elem()
-		val = val.Elem()
-	}
-
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		fieldValue := val.Field(i)
-
-		tag := field.Tag.Get("form")
-		if tag == "" {
-			tag = field.Tag.Get("json")
-		}
-		if tag == "" {
-			tag = field.Tag.Get("query")
-		}
-		if tag == "" {
-			continue
-		}
-
-		name := strings.Split(tag, ",")[0]
-		if name == "-" {
-			continue
-		}
-
-		if values, ok := data[name]; ok && len(values) > 0 {
-			if err := setField(fieldValue, values); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	return x.BindData(v, data)
 }
 
-func setField(field reflect.Value, values []string) error {
-	if len(values) == 0 {
-		return nil
+// Router is a custom router that wraps http.ServeMux and provides additional functionality
+type Router struct {
+	*http.ServeMux
+	routes map[string][]string
+}
+
+// NewRouter creates a new Router
+func NewRouter() *Router {
+	return &Router{
+		ServeMux: http.NewServeMux(),
+		routes:   make(map[string][]string),
+	}
+}
+
+// Handle registers the handler for the given pattern
+func (r *Router) Handle(pattern string, handler http.Handler) {
+	r.ServeMux.Handle(pattern, handler)
+	r.addRoute(pattern, "")
+}
+
+// HandleFunc registers the handler function for the given pattern
+func (r *Router) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	r.ServeMux.HandleFunc(pattern, handler)
+	r.addRoute(pattern, "")
+}
+
+// Group creates a new route group
+func (r *Router) Group(prefix string) *RouterGroup {
+	return &RouterGroup{
+		router: r,
+		prefix: prefix,
+	}
+}
+
+// addRoute adds a route to the routes map
+func (r *Router) addRoute(pattern, method string) {
+	r.routes[pattern] = append(r.routes[pattern], method)
+}
+
+// PrintRoutes prints the routing tree
+func (r *Router) PrintRoutes() {
+	fmt.Println("Routing Tree:")
+	for pattern, methods := range r.routes {
+		fmt.Printf("├── %s\n", pattern)
+		for _, method := range methods {
+			if method != "" {
+				fmt.Printf("│   └── %s\n", method)
+			}
+		}
+	}
+}
+
+// RouterGroup represents a group of routes with a common prefix
+type RouterGroup struct {
+	router *Router
+	prefix string
+}
+
+// Handle registers the handler for the given pattern within the group
+func (g *RouterGroup) Handle(pattern string, handler http.Handler) {
+	fullPattern := g.prefix + pattern
+	g.router.ServeMux.Handle(fullPattern, handler)
+	g.router.addRoute(fullPattern, "")
+}
+
+// HandleFunc registers the handler function for the given pattern within the group
+func (g *RouterGroup) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	fullPattern := g.prefix + pattern
+	g.router.ServeMux.HandleFunc(fullPattern, handler)
+	g.router.addRoute(fullPattern, "")
+}
+
+// Group creates a new sub-group
+func (g *RouterGroup) Group(prefix string) *RouterGroup {
+	return &RouterGroup{
+		router: g.router,
+		prefix: g.prefix + prefix,
+	}
+}
+
+// ListenAndServe starts the HTTP server
+func ListenAndServe(addr string, handler http.Handler) error {
+	return xerror.Wrap(http.ListenAndServe(addr, handler), "error starting HTTP server")
+}
+
+// ListenAndServeTLS starts the HTTPS server
+func ListenAndServeTLS(addr, certFile, keyFile string, handler http.Handler) error {
+	return xerror.Wrap(http.ListenAndServeTLS(addr, certFile, keyFile, handler), "error starting HTTPS server")
+}
+
+// GetParamUint retrieves a URL parameter as an unsigned integer
+func (c *Context) GetParamUint(key string) (uint, error) {
+	return x.StringToUint(c.GetParam(key))
+}
+
+// GetParamUint64 retrieves a URL parameter as an uint64
+func (c *Context) GetParamUint64(key string) (uint64, error) {
+	return x.StringToUint64(c.GetParam(key))
+}
+
+// GetParamDuration retrieves a URL parameter as a time.Duration
+func (c *Context) GetParamDuration(key string) (time.Duration, error) {
+	return x.StringToDuration(c.GetParam(key))
+}
+
+// GetParamTime retrieves a URL parameter as a time.Time
+func (c *Context) GetParamTime(key, layout string) (time.Time, error) {
+	return time.Parse(layout, c.GetParam(key))
+}
+
+// SetStatus sets the HTTP status code
+func (c *Context) SetStatus(code int) {
+	c.Writer.WriteHeader(code)
+}
+
+// NoContent sends a response with no content
+func (c *Context) NoContent(code int) {
+	c.SetStatus(code)
+}
+
+// File sends a file as the response
+func (c *Context) File(filepath string) {
+	http.ServeFile(c.Writer, c.Request, filepath)
+}
+
+// StreamFile streams a file as the response
+func (c *Context) StreamFile(filepath string) error {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return xerror.Wrap(err, "error opening file")
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return xerror.Wrap(err, "error getting file info")
 	}
 
-	switch field.Kind() {
-	case reflect.String:
-		field.SetString(values[0])
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if field.Type() == reflect.TypeOf(time.Duration(0)) {
-			duration, err := time.ParseDuration(values[0])
-			if err != nil {
-				return err
-			}
-			field.Set(reflect.ValueOf(duration))
-		} else {
-			intValue, err := strconv.ParseInt(values[0], 10, 64)
-			if err != nil {
-				return err
-			}
-			field.SetInt(intValue)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		uintValue, err := strconv.ParseUint(values[0], 10, 64)
-		if err != nil {
-			return err
-		}
-		field.SetUint(uintValue)
-	case reflect.Float32, reflect.Float64:
-		floatValue, err := strconv.ParseFloat(values[0], 64)
-		if err != nil {
-			return err
-		}
-		field.SetFloat(floatValue)
-	case reflect.Bool:
-		boolValue, err := strconv.ParseBool(values[0])
-		if err != nil {
-			return err
-		}
-		field.SetBool(boolValue)
-	case reflect.Slice:
-		slice := reflect.MakeSlice(field.Type(), len(values), len(values))
-		for i, value := range values {
-			if err := setField(slice.Index(i), []string{value}); err != nil {
-				return err
-			}
-		}
-		field.Set(slice)
-	case reflect.Struct:
-		if field.Type() == reflect.TypeOf(time.Time{}) {
-			timeValue, err := time.Parse(time.RFC3339, values[0])
-			if err != nil {
-				return err
-			}
-			field.Set(reflect.ValueOf(timeValue))
-		}
-	case reflect.Ptr:
-		if field.IsNil() {
-			field.Set(reflect.New(field.Type().Elem()))
-		}
-		return setField(field.Elem(), values)
-	case reflect.Interface:
-		if field.IsNil() {
-			field.Set(reflect.ValueOf(values[0]))
-		} else {
-			return setField(field.Elem(), values)
-		}
-	default:
-		return nil // Unsupported type
+	c.Writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", stat.Name()))
+	c.Writer.Header().Set("Content-Type", "application/octet-stream")
+	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+
+	_, err = io.Copy(c.Writer, file)
+	return xerror.Wrap(err, "error streaming file")
+}
+
+// BasicAuth returns the username and password provided in the request's
+// Authorization header, if the request uses HTTP Basic Authentication.
+func (c *Context) BasicAuth() (username, password string, ok bool) {
+	return c.Request.BasicAuth()
+}
+
+// IsAjax checks if the request is an AJAX request
+func (c *Context) IsAjax() bool {
+	return c.Request.Header.Get("X-Requested-With") == "XMLHttpRequest"
+}
+
+// ClientIP returns the client's IP address
+func (c *Context) ClientIP() string {
+	ip := c.Request.Header.Get("X-Forwarded-For")
+	if ip == "" {
+		ip = c.Request.Header.Get("X-Real-IP")
 	}
-	return nil
+	if ip == "" {
+		ip = c.Request.RemoteAddr
+	}
+	return strings.Split(ip, ":")[0]
+}
+
+// MustBind binds data to a struct and panics if there's an error
+func (c *Context) MustBind(v interface{}) {
+	if err := c.Bind(v); err != nil {
+		panic(xerror.Wrap(err, "error binding data"))
+	}
+}
+
+// NewRouterWithMiddleware creates a new http.ServeMux with provided middlewares
+func NewRouterWithMiddleware(middlewares ...func(http.Handler) http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	handler := http.Handler(mux)
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		handler = middlewares[i](handler)
+	}
+	return mux
 }
