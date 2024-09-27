@@ -172,6 +172,11 @@ func WithLogOptions(options LogOptions) ClientOption {
 	}
 }
 
+// SetLogOptions sets the logging options for debug mode
+func (c *Client) SetLogOptions(options LogOptions) {
+	c.logOptions = options
+}
+
 // SetBaseURL sets the base URL for all requests
 func (c *Client) SetBaseURL(url string) *Client {
 	c.baseURL = url
@@ -646,4 +651,18 @@ func (c *Client) shouldLogHeader(key string) bool {
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+// WithBearerToken sets bearer auth token for all requests
+func WithBearerToken(token string) ClientOption {
+	return func(c *Client) {
+		c.SetBearerToken(token)
+	}
+}
+
+// WithBaseURL sets the base URL for all requests
+func WithBaseURL(url string) ClientOption {
+	return func(c *Client) {
+		c.SetBaseURL(url)
+	}
 }

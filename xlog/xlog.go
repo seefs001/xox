@@ -20,6 +20,7 @@ var (
 	defaultHandler slog.Handler
 	logConfig      LogConfig
 	defaultLevel   slog.Level
+	handlers       []slog.Handler // Add this line
 )
 
 // LogConfig represents the configuration for logging.
@@ -200,10 +201,65 @@ func (h *ColorConsoleHandler) WithGroup(name string) slog.Handler {
 	return &newHandler
 }
 
-// Add replaces the current handler with a new one
+// Add adds a new handler to the existing handlers
 func Add(handler slog.Handler) {
-	defaultHandler = handler
+	handlers = append(handlers, handler) // Update this line
+	if mh, ok := defaultHandler.(*MultiHandler); ok {
+		// If defaultHandler is already a MultiHandler, add the new handler to it
+		mh.handlers = append(mh.handlers, handler)
+	} else {
+		// If not, create a new MultiHandler with both handlers
+		defaultHandler = NewMultiHandler(defaultHandler, handler)
+	}
 	defaultLogger = slog.New(defaultHandler)
+}
+
+// NewMultiHandler creates a new MultiHandler
+func NewMultiHandler(handlers ...slog.Handler) *MultiHandler {
+	return &MultiHandler{handlers: handlers}
+}
+
+// MultiHandler implements a handler that writes to multiple handlers
+type MultiHandler struct {
+	handlers []slog.Handler
+}
+
+// Enabled implements the Handler interface
+func (h *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+// Handle implements the Handler interface
+func (h *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, handler := range h.handlers {
+		if err := handler.Handle(ctx, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WithAttrs implements the Handler interface
+func (h *MultiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		handlers[i] = handler.WithAttrs(attrs)
+	}
+	return NewMultiHandler(handlers...)
+}
+
+// WithGroup implements the Handler interface
+func (h *MultiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		handlers[i] = handler.WithGroup(name)
+	}
+	return NewMultiHandler(handlers...)
 }
 
 // FileConfig represents the configuration for file logging.
@@ -330,50 +386,16 @@ func Catch(f func() error) {
 	}
 }
 
-// MultiHandler implements a multi-handler that writes to multiple handlers.
-type MultiHandler struct {
-	handlers []slog.Handler
+// Add this interface if it doesn't exist
+type ShutdownHandler interface {
+	Shutdown()
 }
 
-// NewMultiHandler creates a new MultiHandler.
-func NewMultiHandler(handlers ...slog.Handler) *MultiHandler {
-	return &MultiHandler{handlers: handlers}
-}
-
-// Enabled implements the slog.Handler interface.
-func (h *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, handler := range h.handlers {
-		if handler.Enabled(ctx, level) {
-			return true
+// Add a function to shutdown all handlers
+func Shutdown() {
+	for _, handler := range handlers {
+		if sh, ok := handler.(ShutdownHandler); ok {
+			sh.Shutdown()
 		}
 	}
-	return false
-}
-
-// Handle implements the slog.Handler interface.
-func (h *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
-	for _, handler := range h.handlers {
-		if err := handler.Handle(ctx, r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// WithAttrs implements the slog.Handler interface.
-func (h *MultiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	handlers := make([]slog.Handler, len(h.handlers))
-	for i, handler := range h.handlers {
-		handlers[i] = handler.WithAttrs(attrs)
-	}
-	return NewMultiHandler(handlers...)
-}
-
-// WithGroup implements the slog.Handler interface.
-func (h *MultiHandler) WithGroup(name string) slog.Handler {
-	handlers := make([]slog.Handler, len(h.handlers))
-	for i, handler := range h.handlers {
-		handlers[i] = handler.WithGroup(name)
-	}
-	return NewMultiHandler(handlers...)
 }

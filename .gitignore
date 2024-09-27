@@ -26,3 +26,4 @@ go.work.sum
 .log
 .idea/
 .vscode/
+app.*
