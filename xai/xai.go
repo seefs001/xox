@@ -117,12 +117,15 @@ type EmbeddingResponse struct {
 
 // ImageGenerationRequest represents the request for generating images
 type ImageGenerationRequest struct {
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	N              int    `json:"n,omitempty"`
-	Size           string `json:"size,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	ResponseFormat string `json:"response_format,omitempty"`
+	Model                   string `json:"model"`
+	Prompt                  string `json:"prompt"`
+	N                       int    `json:"n,omitempty"`
+	Size                    string `json:"size,omitempty"`
+	Quality                 string `json:"quality,omitempty"`
+	ResponseFormat          string `json:"response_format,omitempty"`
+	UseMidjourney           bool   `json:"use_midjourney,omitempty"`
+	MidjourneyAction        string `json:"midjourney_action,omitempty"`
+	MidjourneyActionContent string `json:"midjourney_action_content,omitempty"`
 }
 
 // ImageGenerationResponse represents the response from the image generation API
@@ -153,20 +156,42 @@ const (
 
 // API endpoints
 const (
-	DefaultBaseURL        = "https://api.openai.com/v1"
-	ChatCompletionsURL    = "/chat/completions"
-	EmbeddingsURL         = "/embeddings"
-	ImageGenerationURL    = "/images/generations"
+	DefaultBaseURL        = "https://api.openai.com"
+	ChatCompletionsURL    = "/v1/chat/completions"
+	EmbeddingsURL         = "/v1/embeddings"
+	ImageGenerationURL    = "/v1/images/generations"
+	MidjourneyURL         = "/mj/submit/imagine"
+	MidjourneyStatusURL   = "/mj/task/{id}/fetch"
+	MidjourneyActionURL   = "/mj/submit/action"
 	DefaultEmbeddingModel = "text-embedding-ada-002"
 	DefaultImageModel     = "dall-e-3"
 	DefaultChunkSize      = 100 // Default chunk size for streaming
 )
 
+const (
+	MidjourneyActionSubmit = "submit"
+	MidjourneyActionStatus = "status"
+	MidjourneyActionAction = "action"
+)
+
 // WithBaseURL sets the base URL for the OpenAI API
 func WithBaseURL(url string) OpenAIClientOption {
 	return func(c *OpenAIClient) {
-		c.baseURL = url
+		c.baseURL = processBaseURL(url)
 	}
+}
+
+func processBaseURL(url string) string {
+	// Remove trailing slash if present
+	url = strings.TrimSuffix(url, "/")
+
+	// Remove "/v1" suffix if present
+	url = strings.TrimSuffix(url, "/v1")
+
+	// Ensure the URL doesn't end with a slash
+	url = strings.TrimSuffix(url, "/")
+
+	return url
 }
 
 // WithAPIKey sets the API key for authentication
@@ -213,6 +238,8 @@ func NewOpenAIClient(options ...OpenAIClientOption) *OpenAIClient {
 	for _, option := range options {
 		option(client)
 	}
+	// handle base url
+	client.baseURL = processBaseURL(client.baseURL)
 
 	if client.debug {
 		client.httpClient.SetDebug(true)
@@ -278,7 +305,7 @@ func (c *OpenAIClient) GenerateText(ctx context.Context, options TextGenerationO
 		requestBody["stream"] = options.IsStreaming
 	}
 
-	resp, err := c.sendRequest(ctx, ChatCompletionsURL, requestBody)
+	resp, err := c.sendRequest(ctx, http.MethodPost, ChatCompletionsURL, requestBody, false)
 	if err != nil {
 		return "", err
 	}
@@ -334,24 +361,88 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 			requestBody["n"] = options.N
 		}
 
-		resp, err := c.sendRequest(ctx, ChatCompletionsURL, requestBody)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		defer resp.Body.Close()
+		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsURL, requestBody)
 
-		c.handleStreamResponse(ctx, resp, textChan, errChan, options.ChunkSize)
+		buffer := strings.Builder{}
+		lastOutputTime := time.Now()
+		const maxOutputInterval = 500 * time.Millisecond
+		const minChunkSize = 10 // Minimum number of characters to output
+
+		flushBuffer := func() {
+			if buffer.Len() > 0 {
+				textChan <- buffer.String()
+				buffer.Reset()
+				lastOutputTime = time.Now()
+			}
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				flushBuffer()
+				return
+			case err := <-responseErrChan:
+				flushBuffer()
+				if err != nil {
+					errChan <- err
+				}
+				return
+			case chunk := <-responseChan:
+				line := strings.TrimSpace(string(chunk))
+				if line == "" || line == "data: [DONE]" {
+					flushBuffer()
+					continue
+				}
+				if !strings.HasPrefix(line, "data: ") {
+					flushBuffer()
+					errChan <- fmt.Errorf("unexpected line format: %s", line)
+					return
+				}
+
+				data := strings.TrimPrefix(line, "data: ")
+				var streamResponse StreamResponse
+				if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
+					flushBuffer()
+					errChan <- fmt.Errorf("error unmarshaling stream data: %w", err)
+					return
+				}
+
+				if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].Delta.Content != "" {
+					buffer.WriteString(streamResponse.Choices[0].Delta.Content)
+					if buffer.Len() >= options.ChunkSize || time.Since(lastOutputTime) >= maxOutputInterval {
+						flushBuffer()
+					}
+				}
+
+				// If we have accumulated some data but haven't output in a while, flush it
+				if buffer.Len() >= minChunkSize && time.Since(lastOutputTime) >= maxOutputInterval {
+					flushBuffer()
+				}
+			}
+		}
 	}()
 
 	return textChan, errChan
 }
 
-func (c *OpenAIClient) sendRequest(ctx context.Context, endpoint string, body interface{}) (*http.Response, error) {
-	resp, err := c.httpClient.
-		SetBaseURL(c.baseURL).
-		SetBearerToken(c.apiKey).
-		PostJSON(ctx, endpoint, body)
+func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string, body interface{}, isMidjourney bool) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+
+	switch method {
+	case http.MethodGet:
+		resp, err = c.httpClient.
+			SetBaseURL(c.baseURL).
+			SetBearerToken(c.apiKey).
+			Get(ctx, endpoint)
+	case http.MethodPost:
+		resp, err = c.httpClient.
+			SetBaseURL(c.baseURL).
+			SetBearerToken(c.apiKey).
+			PostJSON(ctx, endpoint, body)
+	default:
+		return nil, fmt.Errorf("unsupported HTTP method: %s", method)
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
@@ -492,7 +583,7 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, input []string, mod
 		Input: input,
 	}
 
-	resp, err := c.sendRequest(ctx, EmbeddingsURL, requestBody)
+	resp, err := c.sendRequest(ctx, http.MethodPost, EmbeddingsURL, requestBody, false)
 	if err != nil {
 		return nil, err
 	}
@@ -511,6 +602,157 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, input []string, mod
 	return embeddings, nil
 }
 
+// GetMidjourneyStatus gets the status of a Midjourney job
+func (c *OpenAIClient) GetMidjourneyStatus(ctx context.Context, jobID string) (*MidjourneyResponse, error) {
+	return c.GenerateImageWithMidjourney(ctx, jobID, WithMidjourneyAction(MidjourneyActionStatus))
+}
+
+// ActMidjourney is a convenience method for generating an image based on the provided prompt using Midjourney
+func (c *OpenAIClient) ActMidjourney(ctx context.Context, action_content string, job_id string) (*MidjourneyResponse, error) {
+	return c.GenerateImageWithMidjourney(ctx, job_id, WithMidjourneyAction(MidjourneyActionAction), WithMidjourneyActionContent(action_content))
+}
+
+// GetFileIDFromMidjourneySuccessResponse parses the file ID from a successful Midjourney response
+func GetFileIDFromMidjourneySuccessResponse(response *MidjourneyResponse) (string, error) {
+	if response == nil || len(response.Buttons) == 0 {
+		return "", fmt.Errorf("invalid response format")
+	}
+
+	// Extract the file ID from the result string
+	parts := strings.Split(response.Buttons[0].CustomID, "::")
+	if len(parts) < 3 {
+		return "", fmt.Errorf("invalid result format")
+	}
+
+	return parts[2], nil
+}
+
+// MidjourneyAction represents different actions that can be performed on Midjourney images
+const (
+	MJJOBUpsample      = "MJ::JOB::upsample"
+	MJJOBVariation     = "MJ::JOB::variation"
+	MJJOBReroll        = "MJ::JOB::reroll"
+	MJJOBUpsampleV52x  = "MJ::JOB::upsample_v5_2x"
+	MJJOBUpsampleV54x  = "MJ::JOB::upsample_v5_4x"
+	MJJOBLowVariation  = "MJ::JOB::low_variation"
+	MJJOBHighVariation = "MJ::JOB::high_variation"
+	MJInpaint          = "MJ::Inpaint"
+	MJOutpaint50       = "MJ::Outpaint::50"
+	MJOutpaint75       = "MJ::Outpaint::75"
+	MJCustomZoom       = "MJ::CustomZoom"
+	MJJOBPanLeft       = "MJ::JOB::pan_left"
+	MJJOBPanRight      = "MJ::JOB::pan_right"
+	MJJOBPanUp         = "MJ::JOB::pan_up"
+	MJJOBPanDown       = "MJ::JOB::pan_down"
+	MJBOOKMARK         = "MJ::BOOKMARK"
+)
+
+// BuildMidjourneyActionContent builds the action content for Midjourney
+// number 1-4
+// fileID from MidjourneyResponse-> GetFileIDFromMidjourneySuccessResponse
+func BuildMidjourneyActionContent(action, number, fileID string) string {
+	switch action {
+	case MJCustomZoom, MJBOOKMARK:
+		return fmt.Sprintf("%s::%s", action, fileID)
+	case MJJOBUpsample, MJJOBVariation:
+		return fmt.Sprintf("%s::%s::%s", action, number, fileID)
+	case MJJOBReroll:
+		return fmt.Sprintf("%s::0::%s::SOLO", action, fileID)
+	default:
+		return fmt.Sprintf("%s::%s::%s::SOLO", action, number, fileID)
+	}
+}
+
+// GenerateImageWithMidjourney generates an image based on the provided prompt using Midjourney
+func (c *OpenAIClient) GenerateImageWithMidjourney(ctx context.Context, prompt string, options ...func(*ImageGenerationRequest)) (*MidjourneyResponse, error) {
+	var opts = ImageGenerationRequest{
+		Prompt:           prompt,
+		UseMidjourney:    true,
+		MidjourneyAction: MidjourneyActionSubmit,
+	}
+
+	for _, option := range options {
+		option(&opts)
+	}
+
+	var requestBody map[string]interface{}
+	var requestPath string
+	var method string
+
+	switch opts.MidjourneyAction {
+	case MidjourneyActionSubmit:
+		requestPath = MidjourneyURL
+		method = http.MethodPost
+		requestBody = map[string]interface{}{
+			"prompt": prompt,
+		}
+	case MidjourneyActionStatus:
+		requestPath = strings.Replace(MidjourneyStatusURL, "{id}", prompt, 1)
+		method = http.MethodGet
+		requestBody = nil
+	case MidjourneyActionAction:
+		requestPath = MidjourneyActionURL
+		method = http.MethodPost
+		requestBody = map[string]interface{}{
+			"taskId":   prompt,
+			"customId": opts.MidjourneyActionContent,
+		}
+	default:
+		return nil, fmt.Errorf("invalid midjourney action: %s", opts.MidjourneyAction)
+	}
+
+	resp, err := c.sendRequest(ctx, method, requestPath, requestBody, true)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result MidjourneyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+
+	// if result.Code != 1 {
+	// 	return nil, fmt.Errorf("API request failed: %s", result.Description)
+	// }
+
+	return &result, nil
+}
+
+type MidjourneyResponse struct {
+	Code        int    `json:"code"`
+	Description string `json:"description"`
+	Result      string `json:"result"`
+	Properties  struct {
+		DiscordChannelId  string `json:"discordChannelId"`
+		DiscordInstanceId string `json:"discordInstanceId"`
+	} `json:"properties"`
+	ID         string `json:"id"`
+	Action     string `json:"action"`
+	CustomID   string `json:"customId"`
+	BotType    string `json:"botType"`
+	Prompt     string `json:"prompt"`
+	PromptEn   string `json:"promptEn"`
+	State      string `json:"state"`
+	SubmitTime int64  `json:"submitTime"`
+	StartTime  int64  `json:"startTime"`
+	FinishTime int64  `json:"finishTime"`
+	ImageURL   string `json:"imageUrl"`
+	Status     string `json:"status"`
+	Progress   string `json:"progress"`
+	FailReason string `json:"failReason"`
+	Buttons    []struct {
+		CustomID string `json:"customId"`
+		Emoji    string `json:"emoji"`
+		Label    string `json:"label"`
+		Type     int    `json:"type"`
+		Style    int    `json:"style"`
+	} `json:"buttons"`
+	MaskBase64    string `json:"maskBase64"`
+	FinalPrompt   string `json:"finalPrompt"`
+	FinalZhPrompt string `json:"finalZhPrompt"`
+}
+
 // GenerateImage generates an image based on the provided prompt
 func (c *OpenAIClient) GenerateImage(ctx context.Context, prompt string, options ...func(*ImageGenerationRequest)) ([]string, error) {
 	requestBody := ImageGenerationRequest{
@@ -522,7 +764,7 @@ func (c *OpenAIClient) GenerateImage(ctx context.Context, prompt string, options
 		option(&requestBody)
 	}
 
-	resp, err := c.sendRequest(ctx, ImageGenerationURL, requestBody)
+	resp, err := c.sendRequest(ctx, http.MethodPost, ImageGenerationURL, requestBody, false)
 	if err != nil {
 		return nil, err
 	}
@@ -577,5 +819,29 @@ func WithImageResponseFormat(format string) func(*ImageGenerationRequest) {
 func WithImageCount(n int) func(*ImageGenerationRequest) {
 	return func(opts *ImageGenerationRequest) {
 		opts.N = n
+	}
+}
+
+// WithUseMidjourney sets the use of Midjourney for image generation
+func WithUseMidjourney(useMidjourney bool) func(*ImageGenerationRequest) {
+	return func(opts *ImageGenerationRequest) {
+		opts.UseMidjourney = useMidjourney
+	}
+}
+
+// WithMidjourneyAction sets the action for Midjourney image generation
+func WithMidjourneyAction(action string) func(*ImageGenerationRequest) {
+	if action != MidjourneyActionSubmit && action != MidjourneyActionStatus && action != MidjourneyActionAction {
+		panic("invalid midjourney action")
+	}
+	return func(opts *ImageGenerationRequest) {
+		opts.MidjourneyAction = action
+	}
+}
+
+// WithMidjourneyActionContent sets the action content for Midjourney image generation
+func WithMidjourneyActionContent(action_content string) func(*ImageGenerationRequest) {
+	return func(opts *ImageGenerationRequest) {
+		opts.MidjourneyActionContent = action_content
 	}
 }

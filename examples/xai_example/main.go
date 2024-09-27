@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xai"
 	"github.com/seefs001/xox/xenv"
 	"github.com/seefs001/xox/xlog"
@@ -10,10 +12,46 @@ import (
 
 func main() {
 	xenv.Load()
-	client := xai.NewOpenAIClient()
+	client := xai.NewOpenAIClient(xai.WithDebug(true))
+
+	// "MJ::JOB::upsample::1::32839cdf-9db3-4836-a50c-43df2fed88d5"
+	mj_response, err := client.ActMidjourney(context.Background(), xai.BuildMidjourneyActionContent(xai.MJJOBUpsample, "2", "32839cdf-9db3-4836-a50c-43df2fed88d5"), "1727458186093768")
+	if err != nil {
+		xlog.Error("Error generating image", "error", err)
+		return
+	}
+	xlog.Info("Image generation response:")
+	xlog.Info(x.MustToJSON(mj_response))
+	return
+
+	// mj_response, err := client.GenerateImageWithMidjourney(context.Background(), "cute cat girl --niji 5")
+	// if err != nil {
+	// 	xlog.Error("Error generating image", "error", err)
+	// 	return
+	// }
+	// xlog.Info("Image generation response:")
+	// xlog.Info(x.MustToJSON(mj_response))
+
+	for {
+		mj_status, err := client.GetMidjourneyStatus(context.Background(), mj_response.Result)
+		if err != nil {
+			xlog.Error("Error getting midjourney status", "error", err)
+			return
+		}
+		xlog.Info("Midjourney status response:")
+		xlog.Info(x.MustToJSON(mj_status))
+
+		if mj_status.Status == "SUCCESS" || mj_status.FailReason != "" {
+			break
+		}
+
+		time.Sleep(5 * time.Second)
+	}
+
+	// return
 
 	// Text generation (non-streaming)
-	response, err := client.QuickGenerateText(context.Background(), []string{"Hello, world!"}, xai.WithTextModel(xai.ModelClaude35Sonnet))
+	response, err := client.QuickGenerateText(context.Background(), []string{"Hello, world!"}, xai.WithTextModel(xai.ModelGPT4o))
 	if err != nil {
 		xlog.Error("Error generating text", "error", err)
 		return

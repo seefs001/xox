@@ -1,6 +1,7 @@
 package xhttpc
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -315,6 +316,58 @@ func (c *Client) PatchJSON(ctx context.Context, url string, body interface{}) (*
 		return nil, fmt.Errorf("failed to marshal JSON body: %w", err)
 	}
 	return c.Patch(ctx, url, bytes.NewReader(jsonBody))
+}
+
+// StreamResponse performs a streaming request and returns a channel of response chunks
+func (c *Client) StreamResponse(ctx context.Context, method, url string, body interface{}) (<-chan []byte, <-chan error) {
+	responseChan := make(chan []byte)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(responseChan)
+		defer close(errChan)
+
+		req, err := c.createRequest(ctx, method, url, body)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to create request: %w", err)
+			return
+		}
+
+		if c.debug {
+			c.logRequest(req)
+		}
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to send request: %w", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if c.debug && c.logOptions.LogResponse {
+			c.logResponse(resp)
+		}
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				errChan <- fmt.Errorf("error reading stream: %w", err)
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case responseChan <- line:
+			}
+		}
+	}()
+
+	return responseChan, errChan
 }
 
 // startTimeKey is the key used to store the start time in the request context
