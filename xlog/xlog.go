@@ -19,19 +19,23 @@ var (
 	defaultLogger  *slog.Logger
 	defaultHandler slog.Handler
 	logConfig      LogConfig
+	defaultLevel   slog.Level
 )
 
 // LogConfig represents the configuration for logging.
 type LogConfig struct {
 	IncludeFileAndLine bool
+	Level              slog.Level
 }
 
 func init() {
 	logConfig = LogConfig{
-		IncludeFileAndLine: true, // Default to including file and line
+		IncludeFileAndLine: true,           // Default to including file and line
+		Level:              slog.LevelInfo, // Default log level
 	}
+	defaultLevel = logConfig.Level
 	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: defaultLevel,
 	})
 	defaultLogger = slog.New(defaultHandler)
 }
@@ -39,6 +43,20 @@ func init() {
 // SetLogConfig sets the logging configuration.
 func SetLogConfig(config LogConfig) {
 	logConfig = config
+	defaultLevel = config.Level
+	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+		Level: defaultLevel,
+	})
+	defaultLogger = slog.New(defaultHandler)
+}
+
+// SetDefaultLogLevel sets the default logging level.
+func SetDefaultLogLevel(level slog.Level) {
+	defaultLevel = level
+	defaultHandler = NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
+		Level: defaultLevel,
+	})
+	defaultLogger = slog.New(defaultHandler)
 }
 
 // Debug logs a debug message.
@@ -110,7 +128,7 @@ type ColorConsoleHandler struct {
 func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) *ColorConsoleHandler {
 	if opts == nil {
 		opts = &slog.HandlerOptions{
-			Level: slog.LevelInfo, // Default to INFO level
+			Level: defaultLevel,
 		}
 	}
 	return &ColorConsoleHandler{
@@ -165,11 +183,7 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 
 // Enabled implements the slog.Handler interface.
 func (h *ColorConsoleHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	minLevel := slog.LevelInfo
-	if h.opts != nil && h.opts.Level != nil {
-		minLevel = h.opts.Level.Level()
-	}
-	return level >= minLevel
+	return level >= h.opts.Level.Level()
 }
 
 // WithAttrs implements the slog.Handler interface.
@@ -198,6 +212,7 @@ type FileConfig struct {
 	MaxSize    int64 // in bytes
 	MaxBackups int
 	MaxAge     int // in days
+	Level      slog.Level
 }
 
 // RotatingFileHandler implements a rotating file handler.
@@ -219,7 +234,7 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 	if err := h.rotate(); err != nil {
 		return nil, err
 	}
-	h.Handler = slog.NewJSONHandler(h.file, nil)
+	h.Handler = slog.NewJSONHandler(h.file, &slog.HandlerOptions{Level: config.Level})
 	return h, nil
 }
 
