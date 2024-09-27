@@ -17,22 +17,24 @@ func TestNewClient(t *testing.T) {
 	client := NewClient()
 	assert.NotNil(t, client, "NewClient should not return nil")
 
-	assert.Equal(t, 3, client.retryCount, "Default retryCount should be 3")
-	assert.Equal(t, 30*time.Second, client.maxBackoff, "Default maxBackoff should be 30s")
+	assert.Equal(t, 3, client.retryConfig.Count, "Default retry count should be 3")
+	assert.Equal(t, 30*time.Second, client.retryConfig.MaxBackoff, "Default max backoff should be 30s")
 	assert.NotEmpty(t, client.userAgent, "Default userAgent should be set")
 }
 
 func TestClientOptions(t *testing.T) {
 	client := NewClient(
 		WithTimeout(5*time.Second),
-		WithRetryCount(5),
-		WithMaxBackoff(10*time.Second),
+		WithRetryConfig(RetryConfig{
+			Count:      5,
+			MaxBackoff: 10 * time.Second,
+		}),
 		WithUserAgent("TestAgent"),
 	)
 
 	assert.Equal(t, 5*time.Second, client.client.Timeout, "Timeout should be 5s")
-	assert.Equal(t, 5, client.retryCount, "RetryCount should be 5")
-	assert.Equal(t, 10*time.Second, client.maxBackoff, "MaxBackoff should be 10s")
+	assert.Equal(t, 5, client.retryConfig.Count, "RetryCount should be 5")
+	assert.Equal(t, 10*time.Second, client.retryConfig.MaxBackoff, "MaxBackoff should be 10s")
 	assert.Equal(t, "TestAgent", client.userAgent, "UserAgent should be TestAgent")
 }
 
@@ -111,7 +113,10 @@ func TestRetryWithBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(WithRetryCount(3), WithMaxBackoff(100*time.Millisecond))
+	client := NewClient(WithRetryConfig(RetryConfig{
+		Count:      3,
+		MaxBackoff: 100 * time.Millisecond,
+	}))
 
 	resp, err := client.Get(context.Background(), server.URL)
 	require.NoError(t, err, "Request should not fail")
@@ -129,7 +134,7 @@ func TestSetRequestHeaders(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient()
-	client.SetRequestHeaders(map[string]string{
+	client.SetHeaders(map[string]string{
 		"X-Custom-Header": "test-value",
 	})
 

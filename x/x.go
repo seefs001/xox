@@ -3,12 +3,14 @@ package x
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 )
@@ -1009,4 +1011,29 @@ func IsZero[T any](value T) bool {
 		return v.Pointer() == 0
 	}
 	return false
+}
+
+// IsImageURL checks if a string is a valid image URL
+func IsImageURL(s string) bool {
+	// Check if the URL starts with http:// or https://
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return false
+	}
+
+	// Simple check for common image file extensions
+	// You might want to implement a more robust check based on your requirements
+	extensions := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+	lowered := strings.ToLower(s)
+	for _, ext := range extensions {
+		if strings.HasSuffix(lowered, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsBase64 checks if a string is a valid base64 encoded string
+func IsBase64(s string) bool {
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
 }
