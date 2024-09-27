@@ -1,120 +1,65 @@
-# xo
+> **WARNING**: This package is for personal use by seefs. Use at your own risk. The author takes no responsibility for any issues arising from its usage and will not provide support or bug fixes for external users.
 
-A self-used Golang utility package with no third-party dependencies, inspired by various sources.
+> ⚠️ **CAUTION**: By using this package, you acknowledge that you are doing so at your own risk and without any expectation of support or maintenance from the author.
 
-## Introduction
+# xox 🧰
 
-xo is a lightweight Golang utility package designed to provide common functionalities and practical tools without introducing any third-party dependencies. This project draws inspiration and best practices from various excellent open-source projects, carefully curated and optimized to meet everyday development needs.
+xox is a comprehensive Golang utility package that aggregates multiple sub-packages, each designed to provide specific functionalities without introducing third-party dependencies. Inspired by various sources, xox aims to streamline everyday development tasks with clean and efficient solutions.
 
-## Features
+## Features 🌟
 
-- No third-party dependencies: All functionalities are implemented using the Golang standard library
-- Lightweight: Includes only the most commonly used and practical utility functions
-- Easy to use: Clean API design for seamless integration into existing projects
-- Continuous improvement: Constantly refined and expanded based on real-world usage
+- **No third-party dependencies**: All functionalities are implemented using the Golang standard library.
+- **Lightweight**: Includes only the most commonly used and practical utility functions.
+- **Easy to use**: Clean API design for seamless integration into existing projects.
+- **Continuous improvement**: Constantly refined and expanded based on real-world usage.
 
-## Usage
+## Packages 📦
+
+| Package    | Description                                          | Status        | Example                                                                | Test File                                                           |
+|------------|------------------------------------------------------|---------------|------------------------------------------------------------------------|---------------------------------------------------------------------|
+| x          | Core utility methods for various workflows           | 🚧 Working     |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/x/x_test.go)     |
+| xai        | AI-related functionalities                           | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xai_example) | 🚧 To be added |
+| xcast      | Type conversion utilities                            | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xcast/xcast_test.go) |
+| xcli       | CLI application building tools                       | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xcli_example) | 🚧 To be added |
+| xcolor     | Color-related utilities                              | 🚧 Alpha       |                                                                        | 🚧 To be added |
+| xconfig    | Configuration management                             | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xconfig/xconfig_test.go) |
+| xd         | Dependency injection                                 | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xd/xd_test.go)   |
+| xenv       | Environment variable handling                        | 🚧 Alpha       |                                                                        | 🚧 To be added |
+| xerror     | Error handling and processing                        | ⚠️ Known Issues| [Example](https://github.com/seefs001/xox/tree/master/examples/xerror_example) | [Test](https://github.com/seefs001/xox/blob/master/xerror/xerror_test.go) |
+| xhttp      | HTTP server standard library helpers                 | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xhttp_example) | 🚧 To be added |
+| xhttpc     | HTTP client standard library helpers                 | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xhttpc/xhttpc_test.go) |
+| xjson      | JSON path data retrieval                             | ⚠️ Known Issues|                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xjson/xjson_test.go) |
+| xlog       | Logging utilities with various handlers              | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xlog_example) | [Test](https://github.com/seefs001/xox/blob/master/xlog/xlog_test.go) |
+| xmw        | Middleware for standard HTTP servers                 | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xmw_example) | [Test](https://github.com/seefs001/xox/blob/master/xmw/xmw_test.go) |
+| xsb        | SQL builder for database interactions                | 🚧 Working     |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xsb/xsb_test.go) |
+| xsched     | Task scheduling utilities                            | 🚧 Working     | [Example](https://github.com/seefs001/xox/tree/master/examples/xsched_example) | [Test](https://github.com/seefs001/xox/blob/master/xsched/xsched_test.go) |
+| xsupabase  | Supabase integration                                 | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xsupabase_example) | [Test](https://github.com/seefs001/xox/blob/master/xsupabase/xsupabase_test.go) |
+| xtelebot   | Telegram bot API integration                         | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xtelebot_example) | 🚧 To be added |
+| xvalidator | Data validation utilities                            | ⚠️ Known Issues|                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xvalidator/xvalidator_test.go) |
+| xtime      | Time handling utilities                              | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xtime/xtime_test.go) |
+
+## Usage 🚀
+
+To use xox and its sub-packages, follow these steps:
 
 1. Clone the repository:
-
    ```
    git clone https://github.com/seefs001/xox.git
    ```
 
-2. Import the package in your Go code:
-
+2. Import the desired sub-package in your Go code:
    ```go
    import "github.com/seefs001/xox/x"
    ```
 
-3. Use the provided utilities in your project as needed. Here are some examples:
+3. Use the provided utilities as needed in your project.
 
-   ```go
-   // Must functions
-   result := x.Must0(func() (int, error) {
-       return 42, nil
-   })
+## Examples 📚
 
-   // Ignore functions
-   value := x.Ignore1(someFunction())
+Each sub-package comes with its own set of examples demonstrating how to use its functionalities. You can find the examples in the `examples/` directory.
 
-   // Slice operations
-   filtered := x.Where([]int{1, 2, 3, 4, 5}, func(n int) bool {
-       return n%2 == 0
-   })
+## Testing 🧪
 
-   mapped := x.Select([]int{1, 2, 3}, func(n int) string {
-       return string(rune('A' + n - 1))
-   })
+Each sub-package includes unit tests to ensure functionality and reliability. Tests can be found alongside their respective packages.
 
-   sum := x.Aggregate([]int{1, 2, 3, 4, 5}, 0, func(acc, n int) int {
-       return acc + n
-   })
-
-   x.ForEach([]int{1, 2, 3}, func(n int) {
-       fmt.Println(n)
-   })
-
-   numbers := x.Range(1, 5)
-
-   evenCount := x.Count([]int{1, 2, 3, 4, 5}, func(n int) bool {
-       return n%2 == 0
-   })
-
-   grouped := x.GroupBy([]int{1, 2, 3, 4, 5}, func(n int) string {
-       if n%2 == 0 {
-           return "even"
-       }
-       return "odd"
-   })
-
-   first, ok := x.First([]int{1, 2, 3, 4, 5}, func(n int) bool {
-       return n%2 == 0
-   })
-
-   last, ok := x.Last([]int{1, 2, 3, 4, 5}, func(n int) bool {
-       return n%2 == 0
-   })
-
-   hasEven := x.Any([]int{1, 2, 3, 4, 5}, func(n int) bool {
-       return n%2 == 0
-   })
-
-   allEven := x.All([]int{2, 4, 6, 8}, func(n int) bool {
-       return n%2 == 0
-   })
-
-   // Random string generation
-   randomStr, err := x.RandomString(10, x.ModeAlphanumeric)
-
-   // Tuple operations
-   tuple := x.NewTuple(1, "two")
-
-   // Parallel operations
-   x.ParallelFor([]int{1, 2, 3, 4, 5}, func(n int) {
-       fmt.Println(n * 2)
-   })
-
-   doubled := x.ParallelMap([]int{1, 2, 3, 4, 5}, func(n int) int {
-       return n * 2
-   })
-
-   // Async operations
-   task := x.NewAsyncTask(func() (int, error) {
-       time.Sleep(time.Second)
-       return 42, nil
-   })
-   result, err := task.Wait()
-
-   // Debounce and Throttle
-   debouncedFunc := x.Debounce(someFunction, 100*time.Millisecond)
-   throttledFunc := x.Throttle(someFunction, 100*time.Millisecond)
-   ```
-
-## Contributing
-
-Contributions are welcome! If you have any ideas, improvements, or bug fixes, please feel free to open an issue or submit a pull request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+To run all tests, navigate to the root directory and execute:
