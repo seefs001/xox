@@ -10,9 +10,9 @@ import (
 )
 
 func TestCron(t *testing.T) {
-	c := New()
+	c := NewWithTickInterval(100 * time.Millisecond)
 
-	// Test AddFunc
+	// Test AddFunc with valid spec
 	id, err := c.AddFunc("* * * * * *", func() {})
 	assert.NoError(t, err, "AddFunc should not fail with valid spec")
 	assert.NotEmpty(t, id, "AddFunc should return a non-empty job ID")

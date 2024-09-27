@@ -19,13 +19,14 @@ type Schedule interface {
 
 // Cron manages scheduled jobs
 type Cron struct {
-	jobs     []*jobEntry
-	stop     chan struct{}
-	add      chan *jobEntry
-	remove   chan string
-	running  bool
-	mutex    sync.RWMutex
-	location *time.Location
+	jobs        []*jobEntry
+	stop        chan struct{}
+	add         chan *jobEntry
+	remove      chan string
+	running     bool
+	mutex       sync.RWMutex
+	location    *time.Location
+	tickInterval time.Duration // 新增字段
 }
 
 // jobEntry represents a scheduled job
@@ -36,15 +37,29 @@ type jobEntry struct {
 	id       string
 }
 
-// New creates a new Cron instance
+// New creates a new Cron instance with default tick interval of 1 second
 func New() *Cron {
 	return &Cron{
-		jobs:     make([]*jobEntry, 0),
-		add:      make(chan *jobEntry),
-		stop:     make(chan struct{}),
-		remove:   make(chan string),
-		running:  false,
-		location: time.Local,
+		jobs:         make([]*jobEntry, 0),
+		add:          make(chan *jobEntry),
+		stop:         make(chan struct{}),
+		remove:       make(chan string),
+		running:      false,
+		location:     time.Local,
+		tickInterval: time.Second, // 默认1秒
+	}
+}
+
+// NewWithTickInterval creates a new Cron instance with custom tick interval
+func NewWithTickInterval(tick time.Duration) *Cron {
+	return &Cron{
+		jobs:         make([]*jobEntry, 0),
+		add:          make(chan *jobEntry),
+		stop:         make(chan struct{}),
+		remove:       make(chan string),
+		running:      false,
+		location:     time.Local,
+		tickInterval: tick, // 自定义间隔
 	}
 }
 
@@ -103,43 +118,18 @@ func (c *Cron) Start() {
 
 // run executes the main scheduling loop
 func (c *Cron) run() {
-	now := time.Now().In(c.location)
-	c.mutex.Lock()
-	for _, job := range c.jobs {
-		job.next = job.schedule.Next(now)
-	}
-	c.mutex.Unlock()
+	ticker := time.NewTicker(c.tickInterval)
+	defer ticker.Stop()
 
 	for {
-		now = time.Now().In(c.location)
-		var timer *time.Timer
-		c.mutex.RLock()
-		if len(c.jobs) == 0 {
-			timer = time.NewTimer(time.Minute)
-		} else {
-			sort.Slice(c.jobs, func(i, j int) bool {
-				return c.jobs[i].next.Before(c.jobs[j].next)
-			})
-			next := c.jobs[0]
-			delay := next.next.Sub(now)
-			if delay < 0 {
-				delay = 0
-			}
-			timer = time.NewTimer(delay)
-		}
-		c.mutex.RUnlock()
-
 		select {
-		case <-timer.C:
-			c.runJobs(time.Now().In(c.location))
+		case now := <-ticker.C:
+			c.runJobs(now)
 		case <-c.stop:
-			timer.Stop()
 			return
 		case newJob := <-c.add:
-			timer.Stop()
 			c.insertJob(newJob)
 		case id := <-c.remove:
-			timer.Stop()
 			c.removeJob(id)
 		}
 	}
@@ -151,12 +141,16 @@ func (c *Cron) runJobs(now time.Time) {
 	defer c.mutex.Unlock()
 
 	for _, job := range c.jobs {
-		if job.next.After(now) || job.next.IsZero() {
-			break
+		if now.After(job.next) || now.Equal(job.next) {
+			go job.job()
+			job.next = job.schedule.Next(job.next) // 修改这里：基于 job.next 更新下一次执行时间
 		}
-		go job.job()
-		job.next = job.schedule.Next(now)
 	}
+
+	// Re-sort jobs after updating next execution times
+	sort.Slice(c.jobs, func(i, j int) bool {
+		return c.jobs[i].next.Before(c.jobs[j].next)
+	})
 }
 
 // insertJob inserts a new job into the job list
@@ -195,7 +189,15 @@ func (c *Cron) removeJob(id string) {
 
 // AddEverySecond adds a job to be executed every second
 func (c *Cron) AddEverySecond(cmd func()) (string, error) {
-	return c.AddFunc("* * * * * *", cmd)
+	schedule := &everySecondSchedule{}
+	return c.addJob(schedule, Job(cmd)), nil
+}
+
+// everySecondSchedule implements the Schedule interface for every second execution
+type everySecondSchedule struct{}
+
+func (s *everySecondSchedule) Next(t time.Time) time.Time {
+	return t.Add(time.Second)
 }
 
 // AddEveryNSeconds adds a job to be executed every N seconds

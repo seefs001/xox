@@ -89,7 +89,7 @@ func main() {
 
 	// Add a job that runs every second
 	id, err := c.AddEverySecond(func() {
-		fmt.Printf("Job executed at: %s\n", time.Now().Format("15:04:05"))
+		fmt.Printf("Job executed at: %s\n", time.Now().Format("15:04:05.000"))
 	})
 
 	if err != nil {
@@ -104,11 +104,18 @@ func main() {
 
 	// Wait for enough time to ensure the job executes multiple times
 	fmt.Println("Waiting for 10 seconds...")
-	time.Sleep(time.Second * 10)
+	start := time.Now()
+	for time.Since(start) < 10*time.Second {
+		time.Sleep(time.Second)
+		fmt.Printf("Elapsed: %.2f seconds\n", time.Since(start).Seconds())
+	}
 
 	c.Remove(id)
 	fmt.Println("Job removed")
 
 	c.Stop()
 	fmt.Println("Scheduler stopped")
+
+	// Add a small delay to allow any pending output to be printed
+	time.Sleep(time.Millisecond * 100)
 }
