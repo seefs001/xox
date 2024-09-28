@@ -337,7 +337,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 			"n":           options.N,
 		})
 
-		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsURL, requestBody)
+		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsURL, requestBody, xhttpc.WithStreamContentType("application/json"))
 
 		buffer := strings.Builder{}
 		lastOutputTime := time.Now()
@@ -416,10 +416,17 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 			SetBearerToken(c.apiKey).
 			Get(ctx, endpoint)
 	case http.MethodPost:
-		resp, err = c.httpClient.
-			SetBaseURL(c.baseURL).
-			SetBearerToken(c.apiKey).
-			PostJSON(ctx, endpoint, body)
+		if jsonBody, ok := body.(map[string]interface{}); ok {
+			resp, err = c.httpClient.
+				SetBaseURL(c.baseURL).
+				SetBearerToken(c.apiKey).
+				PostJSON(ctx, endpoint, jsonBody)
+		} else {
+			resp, err = c.httpClient.
+				SetBaseURL(c.baseURL).
+				SetBearerToken(c.apiKey).
+				Post(ctx, endpoint, body)
+		}
 	default:
 		return nil, xerror.Newf("unsupported HTTP method: %s", method)
 	}

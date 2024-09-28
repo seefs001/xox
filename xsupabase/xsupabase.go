@@ -124,9 +124,9 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 		case http.MethodGet:
 			resp, err = c.httpClient.Get(ctx, url)
 		case http.MethodPost:
-			resp, err = c.httpClient.PostJSON(ctx, url, body)
+			resp, err = c.httpClient.Post(ctx, url, body)
 		case http.MethodPatch:
-			resp, err = c.httpClient.PatchJSON(ctx, url, body)
+			resp, err = c.httpClient.Patch(ctx, url, body)
 		case http.MethodDelete:
 			resp, err = c.httpClient.Delete(ctx, url)
 		default:

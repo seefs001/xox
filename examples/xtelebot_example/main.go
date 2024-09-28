@@ -103,6 +103,7 @@ func main() {
 	// Create a new Bot instance with custom options
 	bot, err := xtelebot.NewBot(token,
 		xtelebot.WithRequestTimeout(10*time.Second),
+		xtelebot.WithDebug(true),
 		xtelebot.WithErrorHandler(customErrorHandler),
 		xtelebot.WithBaseURL("https://api.telegram.org"),
 	)

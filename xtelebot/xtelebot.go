@@ -110,7 +110,7 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 	}
 
 	if bot.debug {
-		xlog.Info("Bot created in debug mode")
+		xlog.Debug("Bot created in debug mode")
 		bot.client.SetDebug(true)
 	}
 
@@ -159,6 +159,13 @@ func WithRateLimit(requestsPerSecond float64, burstSize int) BotOption {
 		if requestsPerSecond > 0 && burstSize > 0 {
 			b.rateLimiter = NewRateLimiter(requestsPerSecond, burstSize)
 		}
+	}
+}
+
+// WithDebug enables or disables debug mode
+func WithDebug(debug bool) BotOption {
+	return func(b *Bot) {
+		b.debug = debug
 	}
 }
 
@@ -212,7 +219,18 @@ func min(a, b float64) float64 {
 }
 
 // APIRequest sends a request to the Telegram API
+var urlValuesMethods = []string{
+	MethodGetMe,
+	MethodGetUpdates,
+	MethodGetWebhookInfo,
+	MethodGetMyCommands,
+}
+
 func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) ([]byte, error) {
+	if b.debug {
+		xlog.Debug("Sending API request", "method", method, "params", params)
+	}
+
 	b.rateLimiter.Wait() // Wait for rate limiting
 
 	url := fmt.Sprintf("%s/bot%s/%s", b.baseURL, b.token, method)
@@ -220,7 +238,21 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 	ctx, cancel := context.WithTimeout(ctx, b.requestTimeout)
 	defer cancel()
 
-	resp, err := b.client.Post(ctx, url, params)
+	var resp *http.Response
+	var err error
+
+	if x.Contains(urlValuesMethods, method) {
+		resp, err = b.client.PostURLEncoded(ctx, url, xhttpc.URLEncodedForm(params))
+	} else {
+		formData := make(xhttpc.FormData)
+		for key, values := range params {
+			if len(values) > 0 {
+				formData[key] = values[0]
+			}
+		}
+		resp, err = b.client.PostFormData(ctx, url, formData)
+	}
+
 	if err != nil {
 		b.errorHandler(fmt.Errorf("failed to send request: %w", err))
 		return nil, err
@@ -231,6 +263,10 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 	if err != nil {
 		b.errorHandler(fmt.Errorf("failed to read response body: %w", err))
 		return nil, err
+	}
+
+	if b.debug {
+		xlog.Debug("API response received", "status", resp.StatusCode, "body", string(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -244,7 +280,7 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 
 // GetMe gets information about the bot
 func (b *Bot) GetMe(ctx context.Context) (*User, error) {
-	body, err := b.APIRequest(ctx, MethodGetMe, nil)
+	body, err := b.APIRequest(ctx, MethodGetMe, url.Values{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bot information: %w", err)
 	}
@@ -273,6 +309,10 @@ func (b *Bot) GetMe(ctx context.Context) (*User, error) {
 func (b *Bot) SendMessage(ctx context.Context, chatIDOrUsername interface{}, text string, options ...MessageOption) (*Message, error) {
 	if text == "" {
 		return nil, fmt.Errorf("message text cannot be empty")
+	}
+
+	if b.debug {
+		xlog.Debug("Sending message", "chatID", chatIDOrUsername, "text", text)
 	}
 
 	params := url.Values{}
@@ -310,6 +350,10 @@ func (b *Bot) SendMessage(ctx context.Context, chatIDOrUsername interface{}, tex
 		err := fmt.Errorf("API response not OK")
 		b.errorHandler(err)
 		return nil, err
+	}
+
+	if b.debug {
+		xlog.Debug("Message sent", "result", resp.Result)
 	}
 
 	return &resp.Result, nil
@@ -1337,6 +1381,10 @@ func WithLinkPreviewOptions(options LinkPreviewOptions) MessageOption {
 
 // GetUpdatesChan returns a channel that receives updates
 func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan Update, error) {
+	if b.debug {
+		xlog.Debug("Starting update channel", "offset", offset, "limit", limit)
+	}
+
 	updates := make(chan Update, 100)
 
 	go func() {
@@ -1345,6 +1393,9 @@ func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan
 		for {
 			select {
 			case <-ctx.Done():
+				if b.debug {
+					xlog.Debug("Update channel closed due to context cancellation")
+				}
 				return
 			default:
 				newUpdates, err := b.GetUpdates(ctx, offset, limit)
@@ -1354,12 +1405,22 @@ func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan
 					continue
 				}
 
+				if b.debug {
+					xlog.Debug("Received updates", "count", len(newUpdates))
+				}
+
 				for _, update := range newUpdates {
 					select {
 					case <-ctx.Done():
+						if b.debug {
+							xlog.Debug("Update channel closed due to context cancellation")
+						}
 						return
 					case updates <- update:
 						offset = update.UpdateID + 1
+						if b.debug {
+							xlog.Debug("Sent update to channel", "updateID", update.UpdateID)
+						}
 					}
 				}
 

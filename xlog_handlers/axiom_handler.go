@@ -101,7 +101,7 @@ func (h *AxiomHandler) sendLogs(ctx context.Context) error {
 	}
 
 	url := fmt.Sprintf("/v1/datasets/%s/ingest", h.dataset)
-	resp, err := h.client.PostJSON(ctx, url, logs)
+	resp, err := h.client.Post(ctx, url, logs)
 	if err != nil {
 		h.mu.Lock()
 		h.sending = false
@@ -158,7 +158,7 @@ func (h *AxiomHandler) Shutdown() error {
 
 func (h *AxiomHandler) sendLogsImmediate(ctx context.Context, logs []map[string]interface{}) error {
 	url := fmt.Sprintf("/v1/datasets/%s/ingest", h.dataset)
-	resp, err := h.client.PostJSON(ctx, url, logs)
+	resp, err := h.client.Post(ctx, url, logs)
 	if err != nil {
 		return xerror.Wrap(err, "failed to send log to Axiom immediately")
 	}

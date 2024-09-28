@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"math"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -35,17 +37,20 @@ const (
 
 // Client is a high-performance HTTP client with sensible defaults and advanced features
 type Client struct {
-	client      *http.Client
-	retryConfig RetryConfig
-	userAgent   string
-	debug       bool
-	logOptions  LogOptions
-	baseURL     string
-	headers     http.Header
-	cookies     []*http.Cookie
-	queryParams url.Values
-	formData    url.Values
-	authToken   string
+	client           *http.Client
+	retryConfig      RetryConfig
+	userAgent        string
+	debug            bool
+	logOptions       LogOptions
+	baseURL          string
+	headers          http.Header
+	cookies          []*http.Cookie
+	queryParams      url.Values
+	formData         url.Values
+	authToken        string
+	responseCallback func(*http.Response) error
+	requestCallback  func(*http.Request) error
+	forceContentType string
 }
 
 // RetryConfig contains retry-related configuration
@@ -66,6 +71,49 @@ type LogOptions struct {
 
 // ClientOption allows customizing the Client
 type ClientOption func(*Client) error
+
+// StreamOption represents an option for streaming requests
+type StreamOption func(*streamConfig)
+
+// streamConfig holds the configuration for streaming requests
+type streamConfig struct {
+	ContentType string
+	BufferSize  int
+	Delimiter   byte
+}
+
+// WithStreamContentType sets the Content-Type header for streaming requests
+func WithStreamContentType(contentType string) StreamOption {
+	return func(sc *streamConfig) {
+		sc.ContentType = contentType
+	}
+}
+
+// WithStreamBufferSize sets the buffer size for streaming requests
+func WithStreamBufferSize(size int) StreamOption {
+	return func(sc *streamConfig) {
+		sc.BufferSize = size
+	}
+}
+
+// WithStreamDelimiter sets the delimiter for streaming requests
+func WithStreamDelimiter(delimiter byte) StreamOption {
+	return func(sc *streamConfig) {
+		sc.Delimiter = delimiter
+	}
+}
+
+// StreamConfig contains configuration for streaming requests
+type StreamConfig struct {
+	BufferSize int
+	Delimiter  byte
+}
+
+// DefaultStreamConfig provides default settings for streaming
+var DefaultStreamConfig = StreamConfig{
+	BufferSize: 4096,
+	Delimiter:  '\n',
+}
 
 // NewClient creates a new Client with default settings
 func NewClient(options ...ClientOption) (*Client, error) {
@@ -268,11 +316,28 @@ func (c *Client) AddFormDataField(key string, value interface{}) *Client {
 
 // Request performs an HTTP request
 func (c *Client) Request(ctx context.Context, method, url string, body interface{}) (*http.Response, error) {
-	resp, err := c.doRequest(ctx, method, url, body)
-	if err != nil {
-		return nil, xerror.Wrap(err, "request failed")
+	fullURL := url
+	if !isAbsoluteURL(url) && c.baseURL != "" {
+		fullURL = c.baseURL + url
 	}
-	return resp, nil
+	var bodyReader io.Reader
+	if body != nil {
+		switch v := body.(type) {
+		case io.Reader:
+			bodyReader = v
+		default:
+			jsonBody, err := json.Marshal(body)
+			if err != nil {
+				return nil, xerror.Wrap(err, "failed to marshal request body")
+			}
+			bodyReader = bytes.NewReader(jsonBody)
+		}
+	}
+	req, err := c.createRequest(ctx, method, fullURL, bodyReader)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to create request")
+	}
+	return c.doRequest(req)
 }
 
 // Get performs a GET request
@@ -303,7 +368,7 @@ func (c *Client) Delete(ctx context.Context, url string) (*http.Response, error)
 // Do sends an HTTP request and returns an HTTP response, following
 // policy (such as redirects, cookies, auth) as configured on the client.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	return c.doRequest(req.Context(), req.Method, req.URL.String(), req.Body)
+	return c.doRequest(req)
 }
 
 // Head issues a HEAD request to the specified URL.
@@ -317,35 +382,168 @@ func (c *Client) PostForm(url string, data url.Values) (resp *http.Response, err
 	return c.Post(context.Background(), url, data)
 }
 
-// PostJSON performs a POST request with a JSON body
-func (c *Client) PostJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, xerror.Wrap(err, "failed to marshal JSON body")
-	}
-	return c.Post(ctx, url, bytes.NewReader(jsonBody))
+// JSONBody represents a JSON request body
+type JSONBody map[string]interface{}
+
+// FormData represents form data
+type FormData map[string]string
+
+// URLEncodedForm represents URL-encoded form data
+type URLEncodedForm url.Values
+
+// BinaryData represents binary data
+type BinaryData []byte
+
+// PostJSON sends a JSON-encoded POST request
+func (c *Client) PostJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
+	return c.requestWithJSON(ctx, http.MethodPost, url, body)
 }
 
-// PutJSON performs a PUT request with a JSON body
-func (c *Client) PutJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, xerror.Wrap(err, "failed to marshal JSON body")
-	}
-	return c.Put(ctx, url, bytes.NewReader(jsonBody))
+// PostFormData sends a multipart/form-data POST request
+func (c *Client) PostFormData(ctx context.Context, url string, data FormData) (*http.Response, error) {
+	return c.requestWithFormData(ctx, http.MethodPost, url, data)
 }
 
-// PatchJSON performs a PATCH request with a JSON body
-func (c *Client) PatchJSON(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, xerror.Wrap(err, "failed to marshal JSON body")
+// PostURLEncoded sends a x-www-form-urlencoded POST request
+func (c *Client) PostURLEncoded(ctx context.Context, url string, data URLEncodedForm) (*http.Response, error) {
+	return c.requestWithURLEncoded(ctx, http.MethodPost, url, data)
+}
+
+// PostBinary sends a binary POST request
+func (c *Client) PostBinary(ctx context.Context, url string, data BinaryData) (*http.Response, error) {
+	return c.requestWithBinary(ctx, http.MethodPost, url, data)
+}
+
+// PutJSON sends a JSON-encoded PUT request
+func (c *Client) PutJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
+	return c.requestWithJSON(ctx, http.MethodPut, url, body)
+}
+
+// PatchJSON sends a JSON-encoded PATCH request
+func (c *Client) PatchJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
+	return c.requestWithJSON(ctx, http.MethodPatch, url, body)
+}
+
+// PutFormData sends a multipart/form-data PUT request
+func (c *Client) PutFormData(ctx context.Context, url string, data FormData) (*http.Response, error) {
+	return c.requestWithFormData(ctx, http.MethodPut, url, data)
+}
+
+// PutURLEncoded sends a x-www-form-urlencoded PUT request
+func (c *Client) PutURLEncoded(ctx context.Context, url string, data URLEncodedForm) (*http.Response, error) {
+	return c.requestWithURLEncoded(ctx, http.MethodPut, url, data)
+}
+
+// PutBinary sends a binary PUT request
+func (c *Client) PutBinary(ctx context.Context, url string, data BinaryData) (*http.Response, error) {
+	return c.requestWithBinary(ctx, http.MethodPut, url, data)
+}
+
+// PatchFormData sends a multipart/form-data PATCH request
+func (c *Client) PatchFormData(ctx context.Context, url string, data FormData) (*http.Response, error) {
+	return c.requestWithFormData(ctx, http.MethodPatch, url, data)
+}
+
+// PatchURLEncoded sends a x-www-form-urlencoded PATCH request
+func (c *Client) PatchURLEncoded(ctx context.Context, url string, data URLEncodedForm) (*http.Response, error) {
+	return c.requestWithURLEncoded(ctx, http.MethodPatch, url, data)
+}
+
+// PatchBinary sends a binary PATCH request
+func (c *Client) PatchBinary(ctx context.Context, url string, data BinaryData) (*http.Response, error) {
+	return c.requestWithBinary(ctx, http.MethodPatch, url, data)
+}
+
+func (c *Client) requestWithJSON(ctx context.Context, method, url string, body JSONBody) (*http.Response, error) {
+	var jsonBody []byte
+	var err error
+	if body != nil {
+		jsonBody, err = json.Marshal(body)
+		if err != nil {
+			return nil, xerror.Wrap(err, "failed to marshal JSON body")
+		}
 	}
-	return c.Patch(ctx, url, bytes.NewReader(jsonBody))
+	fullURL := url
+	if !isAbsoluteURL(url) && c.baseURL != "" {
+		fullURL = c.baseURL + url
+	}
+	req, err := c.createRequest(ctx, method, fullURL, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.doRequest(req)
+}
+
+func (c *Client) requestWithFormData(ctx context.Context, method, url string, data FormData) (*http.Response, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if data != nil {
+		for key, value := range data {
+			_ = writer.WriteField(key, value)
+		}
+	}
+	err := writer.Close()
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to create form-data")
+	}
+	fullURL := url
+	if !isAbsoluteURL(url) && c.baseURL != "" {
+		fullURL = c.baseURL + url
+	}
+	req, err := c.createRequest(ctx, method, fullURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return c.doRequest(req)
+}
+
+func (c *Client) requestWithURLEncoded(ctx context.Context, method, req_url string, data URLEncodedForm) (*http.Response, error) {
+	var encodedData string
+	if data != nil {
+		encodedData = url.Values(data).Encode()
+	}
+	fullURL := req_url
+	if !isAbsoluteURL(req_url) && c.baseURL != "" {
+		fullURL = c.baseURL + req_url
+	}
+	req, err := c.createRequest(ctx, method, fullURL, strings.NewReader(encodedData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.doRequest(req)
+}
+
+func (c *Client) requestWithBinary(ctx context.Context, method, url string, data BinaryData) (*http.Response, error) {
+	fullURL := url
+	if !isAbsoluteURL(url) && c.baseURL != "" {
+		fullURL = c.baseURL + url
+	}
+	var bodyReader io.Reader
+	if data != nil {
+		bodyReader = bytes.NewReader(data)
+	}
+	req, err := c.createRequest(ctx, method, fullURL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	return c.doRequest(req)
 }
 
 // StreamResponse performs a streaming request and returns a channel of response chunks
-func (c *Client) StreamResponse(ctx context.Context, method, url string, body interface{}) (<-chan []byte, <-chan error) {
+func (c *Client) StreamResponse(ctx context.Context, method, url string, body interface{}, options ...StreamOption) (<-chan []byte, <-chan error) {
+	config := &streamConfig{
+		BufferSize: DefaultStreamConfig.BufferSize,
+		Delimiter:  DefaultStreamConfig.Delimiter,
+	}
+
+	for _, option := range options {
+		option(config)
+	}
+
 	responseChan := make(chan []byte)
 	errChan := make(chan error, 1)
 
@@ -353,10 +551,14 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 		defer close(responseChan)
 		defer close(errChan)
 
-		req, err := c.createRequest(ctx, method, url, body)
+		req, err := c.createRequestWithBody(ctx, method, url, body)
 		if err != nil {
 			errChan <- xerror.Wrap(err, "failed to create request")
 			return
+		}
+
+		if config.ContentType != "" {
+			req.Header.Set("Content-Type", config.ContentType)
 		}
 
 		if c.debug {
@@ -374,11 +576,14 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 			c.logResponse(resp)
 		}
 
-		reader := bufio.NewReader(resp.Body)
+		reader := bufio.NewReaderSize(resp.Body, config.BufferSize)
 		for {
-			line, err := reader.ReadBytes('\n')
+			line, err := reader.ReadBytes(config.Delimiter)
 			if err != nil {
 				if err == io.EOF {
+					if len(line) > 0 {
+						responseChan <- line
+					}
 					return
 				}
 				errChan <- xerror.Wrap(err, "error reading stream")
@@ -397,29 +602,199 @@ func (c *Client) StreamResponse(ctx context.Context, method, url string, body in
 	return responseChan, errChan
 }
 
+// StreamJSON performs a streaming request and returns a channel of JSON-decoded objects
+func (c *Client) StreamJSON(ctx context.Context, method, url string, body interface{}, options ...StreamOption) (<-chan interface{}, <-chan error) {
+	responseChan := make(chan interface{})
+	errChan := make(chan error, 1)
+
+	bytesChan, bytesErrChan := c.StreamResponse(ctx, method, url, body, options...)
+
+	go func() {
+		defer close(responseChan)
+		defer close(errChan)
+
+		for {
+			select {
+			case bytes, ok := <-bytesChan:
+				if !ok {
+					return
+				}
+				var data interface{}
+				err := json.Unmarshal(bytes, &data)
+				if err != nil {
+					errChan <- xerror.Wrap(err, "failed to unmarshal JSON")
+					return
+				}
+				responseChan <- data
+			case err, ok := <-bytesErrChan:
+				if !ok {
+					return
+				}
+				errChan <- err
+			}
+		}
+	}()
+
+	return responseChan, errChan
+}
+
+// StreamSSE performs a streaming request for Server-Sent Events
+func (c *Client) StreamSSE(ctx context.Context, url string) (<-chan *SSEEvent, <-chan error) {
+	eventChan := make(chan *SSEEvent)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(eventChan)
+		defer close(errChan)
+
+		req, err := c.createRequestWithBody(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			errChan <- xerror.Wrap(err, "failed to create request")
+			return
+		}
+		req.Header.Set("Accept", "text/event-stream")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			errChan <- xerror.Wrap(err, "failed to send request")
+			return
+		}
+		defer resp.Body.Close()
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			event, err := parseSSEEvent(reader)
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				errChan <- xerror.Wrap(err, "error parsing SSE event")
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				errChan <- xerror.Wrap(ctx.Err(), "context cancelled during SSE streaming")
+				return
+			case eventChan <- event:
+			}
+		}
+	}()
+
+	return eventChan, errChan
+}
+
+// SSEEvent represents a Server-Sent Event
+type SSEEvent struct {
+	ID    string
+	Event string
+	Data  string
+}
+
+func parseSSEEvent(reader *bufio.Reader) (*SSEEvent, error) {
+	event := &SSEEvent{}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			// End of event
+			return event, nil
+		}
+
+		colonIndex := strings.Index(line, ":")
+		if colonIndex == -1 {
+			continue // Ignore lines without colon
+		}
+
+		field := line[:colonIndex]
+		value := strings.TrimPrefix(line[colonIndex+1:], " ")
+
+		switch field {
+		case "id":
+			event.ID = value
+		case "event":
+			event.Event = value
+		case "data":
+			event.Data += value + "\n"
+		}
+	}
+}
+
+// WithCustomTransport sets a custom transport for the client
+func WithCustomTransport(transport http.RoundTripper) ClientOption {
+	return func(c *Client) error {
+		c.client.Transport = transport
+		return nil
+	}
+}
+
+// WithTLSConfig sets a custom TLS configuration for the client
+func WithTLSConfig(tlsConfig *tls.Config) ClientOption {
+	return func(c *Client) error {
+		transport, ok := c.client.Transport.(*http.Transport)
+		if !ok {
+			transport = &http.Transport{}
+		}
+		transport.TLSClientConfig = tlsConfig
+		c.client.Transport = transport
+		return nil
+	}
+}
+
+// WithDialContext sets a custom DialContext function for the client
+func WithDialContext(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) ClientOption {
+	return func(c *Client) error {
+		transport, ok := c.client.Transport.(*http.Transport)
+		if !ok {
+			transport = &http.Transport{}
+		}
+		transport.DialContext = dialContext
+		c.client.Transport = transport
+		return nil
+	}
+}
+
+// WithResponseCallback sets a callback function to be called after each response
+func WithResponseCallback(callback func(*http.Response) error) ClientOption {
+	return func(c *Client) error {
+		c.responseCallback = callback
+		return nil
+	}
+}
+
+// WithRequestCallback sets a callback function to be called before each request
+func WithRequestCallback(callback func(*http.Request) error) ClientOption {
+	return func(c *Client) error {
+		c.requestCallback = callback
+		return nil
+	}
+}
+
 // startTimeKey is the key used to store the start time in the request context
 var startTimeKey = struct{}{}
 
-func (c *Client) doRequest(ctx context.Context, method, reqURL string, body interface{}) (*http.Response, error) {
-	fullURL := c.baseURL + reqURL
-	req, err := c.createRequest(ctx, method, fullURL, body)
-	if err != nil {
-		return nil, xerror.Wrap(err, "failed to create request")
-	}
+// GetClient returns the underlying http.Client
+func (c *Client) GetClient() *http.Client {
+	return c.client
+}
 
+func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	if c.debug {
 		c.logRequest(req)
-		ctx = context.WithValue(ctx, startTimeKey, time.Now())
-		req = req.WithContext(ctx)
+		req = req.WithContext(context.WithValue(req.Context(), startTimeKey, time.Now()))
 	}
 
 	var resp *http.Response
+	var err error
+
 	if c.retryConfig.Enabled {
 		operation := func() error {
-			var opErr error
-			resp, opErr = c.client.Do(req)
-			if opErr != nil {
-				return xerror.Wrap(opErr, "failed to send request")
+			resp, err = c.client.Do(req)
+			if err != nil {
+				return xerror.Wrap(err, "failed to send request")
 			}
 			if resp.StatusCode >= 500 {
 				return xerror.Newf("server error: %d", resp.StatusCode)
@@ -427,7 +802,7 @@ func (c *Client) doRequest(ctx context.Context, method, reqURL string, body inte
 			return nil
 		}
 
-		err = c.retryWithBackoff(ctx, operation)
+		err = c.retryWithBackoff(req.Context(), operation)
 		if err != nil {
 			return nil, xerror.Wrap(err, "request failed after retries")
 		}
@@ -445,48 +820,10 @@ func (c *Client) doRequest(ctx context.Context, method, reqURL string, body inte
 	return resp, nil
 }
 
-func (c *Client) createRequest(ctx context.Context, method, reqURL string, body interface{}) (*http.Request, error) {
-	var bodyReader io.Reader
-	var contentType string
-
-	if body != nil {
-		switch v := body.(type) {
-		case url.Values:
-			bodyReader = strings.NewReader(v.Encode())
-			contentType = "application/x-www-form-urlencoded"
-		case io.Reader:
-			bodyReader = v
-			// Check if the reader is a *bytes.Reader containing JSON data
-			if jsonReader, ok := v.(*bytes.Reader); ok {
-				jsonData, _ := io.ReadAll(jsonReader)
-				if json.Valid(jsonData) {
-					contentType = "application/json"
-					bodyReader = bytes.NewReader(jsonData)
-				}
-			}
-		default:
-			jsonBody, err := json.Marshal(body)
-			if err != nil {
-				return nil, xerror.Wrap(err, "failed to marshal request body")
-			}
-			bodyReader = bytes.NewReader(jsonBody)
-			contentType = "application/json"
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
+func (c *Client) createRequest(ctx context.Context, method, reqURL string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return nil, xerror.Wrap(err, "failed to create request")
-	}
-
-	// Set method-specific headers
-	switch method {
-	case http.MethodGet:
-		req.Header.Set("Cache-Control", "no-cache")
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		if contentType != "" {
-			req.Header.Set("Content-Type", contentType)
-		}
 	}
 
 	// Set default headers
@@ -513,14 +850,14 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 	}
 	req.URL.RawQuery = q.Encode()
 
-	// Set form data
-	if (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) && contentType == "application/x-www-form-urlencoded" {
-		req.PostForm = c.formData
-	}
-
 	// Set auth token
 	if c.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	// 在设置其他 header 之后，添加以下代码
+	if c.forceContentType != "" {
+		req.Header.Set("Content-Type", c.forceContentType)
 	}
 
 	return req, nil
@@ -555,92 +892,82 @@ func (c *Client) retryWithBackoff(ctx context.Context, operation func() error) e
 }
 
 func (c *Client) logRequest(req *http.Request) {
-	xlog.Info("HTTP Request", "method", req.Method, "url", req.URL.String())
+	xlog.Debug("HTTP Request",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"proto", req.Proto,
+		"content_length", req.ContentLength,
+	)
 
-	if c.logOptions.LogHeaders {
+	if c.logOptions.LogHeaders && req.Header != nil {
 		for key, values := range req.Header {
 			if c.shouldLogHeader(key) {
-				for _, value := range values {
-					xlog.Info("Request Header", "key", key, "value", value)
-				}
+				xlog.Debug("Request Header", "key", key, "value", strings.Join(values, ", "))
 			}
 		}
 	}
 
 	if c.logOptions.LogBody && req.Body != nil {
-		body, _ := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
-		if len(body) > c.logOptions.MaxBodyLogSize {
-			xlog.Info("Request Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			xlog.Warn("Failed to read request body", "error", err)
 		} else {
-			xlog.Info("Request Body", "body", string(body))
+			req.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+			if len(body) > c.logOptions.MaxBodyLogSize {
+				xlog.Debug("Request Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+			} else {
+				xlog.Debug("Request Body", "body", string(body))
+			}
 		}
 	}
 
-	xlog.Info("Request Details",
-		"method", req.Method,
-		"url", req.URL.String(),
-		"protocol", req.Proto,
+	xlog.Debug("Request Details",
 		"host", req.Host,
-		"content_length", req.ContentLength,
-		"transfer_encoding", req.TransferEncoding,
-		"close", req.Close,
-		"trailer", req.Trailer,
 		"remote_addr", req.RemoteAddr,
 		"request_uri", req.RequestURI,
 	)
-
-	if c.debug {
-		xlog.Info("Custom Client Settings",
-			"base_url", c.baseURL,
-			"user_agent", c.userAgent,
-			"retry_enabled", c.retryConfig.Enabled,
-			"retry_count", c.retryConfig.Count,
-			"max_backoff", c.retryConfig.MaxBackoff,
-			"debug_mode", c.debug,
-		)
-	}
 }
 
 func (c *Client) logResponse(resp *http.Response) {
-	xlog.Info("HTTP Response", "status", resp.Status, "status_code", resp.StatusCode)
+	if resp == nil {
+		xlog.Warn("Received nil response")
+		return
+	}
 
-	if c.logOptions.LogHeaders {
+	xlog.Debug("HTTP Response",
+		"status", resp.Status,
+		"status_code", resp.StatusCode,
+		"proto", resp.Proto,
+		"content_length", resp.ContentLength,
+	)
+
+	if c.logOptions.LogHeaders && resp.Header != nil {
 		for key, values := range resp.Header {
 			if c.shouldLogHeader(key) {
-				for _, value := range values {
-					xlog.Info("Response Header", "key", key, "value", value)
-				}
+				xlog.Debug("Response Header", "key", key, "value", strings.Join(values, ", "))
 			}
 		}
 	}
 
 	if c.logOptions.LogBody && resp.Body != nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
-		if len(body) > c.logOptions.MaxBodyLogSize {
-			xlog.Info("Response Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			xlog.Warn("Failed to read response body", "error", err)
 		} else {
-			xlog.Info("Response Body", "body", string(body))
+			resp.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+			if len(body) > c.logOptions.MaxBodyLogSize {
+				xlog.Debug("Response Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+			} else {
+				xlog.Debug("Response Body", "body", string(body))
+			}
 		}
 	}
 
-	xlog.Info("Response Details",
-		"status", resp.Status,
-		"status_code", resp.StatusCode,
-		"protocol", resp.Proto,
-		"content_length", resp.ContentLength,
-		"transfer_encoding", resp.TransferEncoding,
-		"uncompressed", resp.Uncompressed,
-		"trailer", resp.Trailer,
-	)
-
-	if c.debug {
-		// Safely get and use startTimeKey
+	if resp.Request != nil && resp.Request.Context() != nil {
 		if startTimeValue := resp.Request.Context().Value(startTimeKey); startTimeValue != nil {
 			if startTime, ok := startTimeValue.(time.Time); ok {
 				duration := time.Since(startTime)
-				xlog.Info("Response Timing",
+				xlog.Debug("Response Timing",
 					"duration", duration.String(),
 					"start_time", startTime.Format(time.RFC3339),
 					"end_time", time.Now().Format(time.RFC3339),
@@ -652,7 +979,7 @@ func (c *Client) logResponse(resp *http.Response) {
 
 func (c *Client) shouldLogHeader(key string) bool {
 	if len(c.logOptions.HeaderKeysToLog) == 0 {
-		return false // Don't log any headers if no specific keys are set
+		return true // Log all headers if no specific keys are set
 	}
 	for _, allowedKey := range c.logOptions.HeaderKeysToLog {
 		if strings.EqualFold(key, allowedKey) {
@@ -681,4 +1008,49 @@ func WithBaseURL(url string) ClientOption {
 		c.SetBaseURL(url)
 		return nil
 	}
+}
+
+// isAbsoluteURL checks if the given URL is absolute
+func isAbsoluteURL(u string) bool {
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
+
+func (c *Client) createRequestWithBody(ctx context.Context, method, url string, body interface{}) (*http.Request, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		switch v := body.(type) {
+		case io.Reader:
+			bodyReader = v
+		default:
+			jsonBody, err := json.Marshal(body)
+			if err != nil {
+				return nil, xerror.Wrap(err, "failed to marshal request body")
+			}
+			bodyReader = bytes.NewReader(jsonBody)
+		}
+	}
+	req, err := c.createRequest(ctx, method, url, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.forceContentType == "" {
+		switch body.(type) {
+		case JSONBody:
+			req.Header.Set("Content-Type", "application/json")
+		case FormData:
+		case URLEncodedForm:
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		case BinaryData:
+			req.Header.Set("Content-Type", "application/octet-stream")
+		}
+	}
+
+	return req, nil
+}
+
+// SetForceContentType sets the Content-Type header for all requests
+func (c *Client) SetForceContentType(contentType string) *Client {
+	c.forceContentType = contentType
+	return c
 }

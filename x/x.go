@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -1960,4 +1961,38 @@ func GenerateUUID() (string, error) {
 	uuid[8] = (uuid[8] & 0x3f) | 0x80
 
 	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:]), nil
+}
+
+// DecodeUnicodeURL decodes a URL string that contains Unicode escape sequences
+// back to its original form.
+//
+// Example:
+//
+//	encoded := "https://example.com/path?q=%E4%BD%A0%E5%A5%BD"
+//	decoded, err := DecodeUnicodeURL(encoded)
+//	if err != nil {
+//		// handle error
+//	}
+//	fmt.Println(decoded) // Output: https://example.com/path?q=你好
+func DecodeUnicodeURL(encodedURL string) (string, error) {
+	decodedURL, err := url.QueryUnescape(encodedURL)
+	if err != nil {
+		return "", xerror.Wrap(err, "failed to decode Unicode URL")
+	}
+	return decodedURL, nil
+}
+
+// EncodeUnicodeURL encodes a URL string to include Unicode escape sequences
+// for non-ASCII characters.
+//
+// Example:
+//
+//	original := "https://example.com/path?q=你好"
+//	encoded, err := EncodeUnicodeURL(original)
+//	if err != nil {
+//		// handle error
+//	}
+//	fmt.Println(encoded) // Output: https://example.com/path?q=%E4%BD%A0%E5%A5%BD
+func EncodeUnicodeURL(originalURL string) (string, error) {
+	return url.QueryEscape(originalURL), nil
 }
