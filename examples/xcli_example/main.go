@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/seefs001/xox/xcli"
 	"github.com/seefs001/xox/xlog"
@@ -13,113 +14,227 @@ import (
 func main() {
 	xlog.Info("Starting CLI application example")
 
-	// Create the root command
-	rootCmd := xcli.NewCommand("app", "A comprehensive CLI application example", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing root command")
-		fmt.Println("Welcome to the CLI application. Use 'hello', 'goodbye', 'add', or 'version' subcommands.")
+	// Create the app
+	app := xcli.NewApp("myapp", "A comprehensive CLI application example", "1.0.0")
+
+	// Add global flags
+	verbose := app.Flags.Bool("verbose", false, "Enable verbose output")
+	logFile := app.Flags.String("log-file", "app.log", "Path to log file")
+	debug := app.Flags.Bool("debug", false, "Enable debug mode")
+
+	// Set custom error handler
+	app.SetErrorHandler(func(err error) {
+		xlog.Errorf("Application error: %v", err)
+		os.Exit(1)
+	})
+
+	// Set default run function
+	app.SetDefaultRun(func(ctx context.Context, app *xcli.App) error {
+		fmt.Println("Welcome to the CLI application. Use 'hello', 'goodbye', 'add', or 'version' commands.")
+		fmt.Println("For more information, use the --help flag.")
+		if *verbose {
+			fmt.Println("Verbose mode is enabled.")
+			fmt.Printf("Log file: %s\n", *logFile)
+		}
 		return nil
 	})
 
-	// Set version for the root command
-	rootCmd.SetVersion("1.0.0")
-	xlog.Info("Root command version set", "version", rootCmd.Version)
-
-	// Create a hello subcommand
-	helloCmd := xcli.NewCommand("hello", "Prints a greeting message", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing hello subcommand")
-		greeting := cmdCtx.Flags.Lookup("greeting").Value.String()
-		if len(cmdCtx.Args) < 1 {
-			return fmt.Errorf("name is required")
-		}
-		name := cmdCtx.Args[0]
-		fmt.Printf("%s, %s!\n", greeting, name)
-		return nil
-	})
-
-	// Add flags to the hello command
-	helloCmd.Flags.String("greeting", "Hello", "Custom greeting message")
-	xlog.Info("Added greeting flag to hello command")
-
-	// Set aliases for the hello command
-	helloCmd.SetAliases("hi", "greet")
-	xlog.Info("Set aliases for hello command", "aliases", []string{"hi", "greet"})
-
-	// Add the hello subcommand to the root command
-	rootCmd.AddSubcommand(helloCmd)
-	xlog.Info("Added hello subcommand to root command")
-
-	// Create a goodbye subcommand
-	goodbyeCmd := xcli.NewCommand("goodbye", "Prints a farewell message", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing goodbye subcommand")
-		farewell := cmdCtx.Flags.Lookup("farewell").Value.String()
-		if len(cmdCtx.Args) < 1 {
-			return fmt.Errorf("name is required")
-		}
-		name := cmdCtx.Args[0]
-		fmt.Printf("%s, %s!\n", farewell, name)
-		return nil
-	})
-
-	// Add flags to the goodbye command
-	goodbyeCmd.Flags.String("farewell", "Goodbye", "Custom farewell message")
-	xlog.Info("Added farewell flag to goodbye command")
-
-	// Add the goodbye subcommand to the root command
-	rootCmd.AddSubcommand(goodbyeCmd)
-	xlog.Info("Added goodbye subcommand to root command")
-
-	// Create an add subcommand for adding numbers
-	addCmd := xcli.NewCommand("add", "Adds two or more numbers", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing add subcommand")
-		if len(cmdCtx.Args) < 2 {
-			return fmt.Errorf("at least two numbers are required")
-		}
-		sum := 0
-		for _, arg := range cmdCtx.Args {
-			num, err := strconv.Atoi(arg)
-			if err != nil {
-				return fmt.Errorf("invalid number: %s", arg)
+	// Add hello command
+	app.AddCommand(&xcli.Command{
+		Name:        "hello",
+		Description: "Prints a greeting message",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			name := cmd.Flags.String("name", "World", "Name to greet")
+			uppercase := cmd.Flags.Bool("uppercase", false, "Print greeting in uppercase")
+			if err := cmd.Flags.Parse(args); err != nil {
+				return err
 			}
-			sum += num
-		}
-		fmt.Printf("The sum is %d\n", sum)
-		return nil
+
+			greeting := fmt.Sprintf("Hello, %s!", *name)
+			if *uppercase {
+				greeting = strings.ToUpper(greeting)
+			}
+			fmt.Println(greeting)
+
+			if *verbose {
+				xlog.Infof("Executed hello command with name: %s, uppercase: %v", *name, *uppercase)
+			}
+			return nil
+		},
+		Aliases: []string{"hi", "greet"},
 	})
 
-	// Add the add subcommand to the root command
-	rootCmd.AddSubcommand(addCmd)
-	xlog.Info("Added add subcommand to root command")
+	// Add goodbye command
+	app.AddCommand(&xcli.Command{
+		Name:        "goodbye",
+		Description: "Prints a farewell message",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			name := cmd.Flags.String("name", "World", "Name to bid farewell")
+			if err := cmd.Flags.Parse(args); err != nil {
+				return err
+			}
 
-	// Create a hidden debug subcommand
-	debugCmd := xcli.NewCommand("debug", "Prints debug information", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing debug subcommand")
-		fmt.Println("Debug mode activated")
-		return nil
-	})
-	debugCmd.SetHidden(true)
-	rootCmd.AddSubcommand(debugCmd)
-	xlog.Info("Added hidden debug subcommand to root command")
+			fmt.Printf("Goodbye, %s!\n", *name)
 
-	// Create a version subcommand
-	versionCmd := xcli.NewCommand("version", "Prints the application version", func(ctx context.Context, cmdCtx *xcli.CommandContext) error {
-		xlog.Info("Executing version subcommand")
-		fmt.Printf("App version: %s\n", rootCmd.Version)
-		return nil
+			if *verbose {
+				xlog.Infof("Executed goodbye command with name: %s", *name)
+			}
+			return nil
+		},
 	})
-	rootCmd.AddSubcommand(versionCmd)
-	xlog.Info("Added version subcommand to root command")
+
+	// Add add command
+	app.AddCommand(&xcli.Command{
+		Name:        "add",
+		Description: "Adds two or more numbers",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			numbers := cmd.Flags.String("numbers", "", "Comma-separated list of numbers to add")
+			if err := cmd.Flags.Parse(args); err != nil {
+				return err
+			}
+
+			var nums []string
+			if *numbers != "" {
+				nums = strings.Split(*numbers, ",")
+			} else {
+				nums = cmd.Flags.Args()
+			}
+
+			if len(nums) < 2 {
+				return fmt.Errorf("please provide at least two numbers to add")
+			}
+
+			sum := 0
+			for _, num := range nums {
+				n, err := strconv.Atoi(strings.TrimSpace(num))
+				if err != nil {
+					return fmt.Errorf("invalid number: %s", num)
+				}
+				sum += n
+			}
+
+			fmt.Printf("The sum is %d\n", sum)
+
+			if *verbose {
+				xlog.Infof("Executed add command with numbers: %v, sum: %d", nums, sum)
+			}
+			return nil
+		},
+	})
+
+	// Add version command
+	app.AddCommand(&xcli.Command{
+		Name:        "version",
+		Description: "Prints the application version",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			fmt.Printf("App version: %s\n", app.Version)
+			if *verbose {
+				xlog.Info("Executed version command")
+			}
+			return nil
+		},
+	})
 
 	// Enable color output
 	xcli.EnableColor(true)
-	xlog.Info("Enabled color output")
 
-	// Enable debug mode (for demonstration purposes)
-	xcli.EnableDebug(true)
-	xlog.Info("Enabled debug mode")
+	// Set debug mode based on flag
+	xcli.EnableDebug(*debug)
+	// Run the application
+	xlog.Debug("Running the application with arguments", "args", os.Args[1:])
+	if err := app.Run(context.Background(), os.Args[1:]); err != nil {
+		xlog.Errorf("Application error: %v", err)
+		os.Exit(1)
+	}
 
-	// Execute the root command
-	xlog.Info("Executing root command with arguments", "args", os.Args[1:])
-	xcli.Execute(rootCmd, os.Args[1:])
+	xlog.Info("CLI application example completed")
+
+	// Add a new "math" command with subcommands
+	mathCmd := &xcli.Command{
+		Name:        "math",
+		Description: "Perform various mathematical operations",
+		SubCommands: make(map[string]*xcli.Command),
+	}
+
+	// Add "add" subcommand
+	mathCmd.SubCommands["add"] = &xcli.Command{
+		Name:        "add",
+		Description: "Add two or more numbers",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			numbers := cmd.Flags.String("numbers", "", "Comma-separated list of numbers to add")
+			if err := cmd.Flags.Parse(args); err != nil {
+				return err
+			}
+
+			var nums []string
+			if *numbers != "" {
+				nums = strings.Split(*numbers, ",")
+			} else {
+				nums = cmd.Flags.Args()
+			}
+
+			if len(nums) < 2 {
+				return fmt.Errorf("please provide at least two numbers to add")
+			}
+
+			sum := 0
+			for _, num := range nums {
+				n, err := strconv.Atoi(strings.TrimSpace(num))
+				if err != nil {
+					return fmt.Errorf("invalid number: %s", num)
+				}
+				sum += n
+			}
+
+			fmt.Printf("The sum is %d\n", sum)
+
+			if *verbose {
+				xlog.Infof("Executed math add command with numbers: %v, sum: %d", nums, sum)
+			}
+			return nil
+		},
+	}
+
+	// Add "multiply" subcommand
+	mathCmd.SubCommands["multiply"] = &xcli.Command{
+		Name:        "multiply",
+		Description: "Multiply two or more numbers",
+		Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+			numbers := cmd.Flags.String("numbers", "", "Comma-separated list of numbers to multiply")
+			if err := cmd.Flags.Parse(args); err != nil {
+				return err
+			}
+
+			var nums []string
+			if *numbers != "" {
+				nums = strings.Split(*numbers, ",")
+			} else {
+				nums = cmd.Flags.Args()
+			}
+
+			if len(nums) < 2 {
+				return fmt.Errorf("please provide at least two numbers to multiply")
+			}
+
+			product := 1
+			for _, num := range nums {
+				n, err := strconv.Atoi(strings.TrimSpace(num))
+				if err != nil {
+					return fmt.Errorf("invalid number: %s", num)
+				}
+				product *= n
+			}
+
+			fmt.Printf("The product is %d\n", product)
+
+			if *verbose {
+				xlog.Infof("Executed math multiply command with numbers: %v, product: %d", nums, product)
+			}
+			return nil
+		},
+	}
+
+	app.AddCommand(mathCmd)
 
 	xlog.Info("CLI application example completed")
 }

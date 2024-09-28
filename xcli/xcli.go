@@ -13,155 +13,216 @@ import (
 	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcolor"
 	"github.com/seefs001/xox/xerror"
+	"github.com/seefs001/xox/xlog"
 )
 
 var (
 	debugMode = false
 )
 
-// Command represents a CLI command with its flags and subcommands.
+// App represents the main CLI application
+type App struct {
+	Name         string
+	Description  string
+	Version      string
+	Flags        *flag.FlagSet
+	Commands     map[string]*Command
+	DefaultRun   func(ctx context.Context, app *App) error
+	ErrorHandler func(error)                               // Error handling function
+	BeforeRun    func(ctx context.Context, app *App) error // Function to run before command execution
+	AfterRun     func(ctx context.Context, app *App) error // Function to run after command execution
+}
+
+// Command represents a CLI command
 type Command struct {
 	Name        string
 	Description string
 	Flags       *flag.FlagSet
-	Subcommands map[string]*Command
-	Run         func(ctx context.Context, cmdCtx *CommandContext) error
-	DisableHelp bool
-	CustomHelp  func(*Command)
+	Run         func(ctx context.Context, cmd *Command, args []string) error
 	Aliases     []string
 	Hidden      bool
-	Version     string
+	SubCommands map[string]*Command // Support for subcommands
 }
 
-// CommandContext holds the context of the current command execution.
-type CommandContext struct {
-	Command *Command
-	Flags   *flag.FlagSet
-	Args    []string
-}
-
-// NewCommand creates a new Command.
-func NewCommand(name, description string, run func(ctx context.Context, cmdCtx *CommandContext) error) *Command {
-	return &Command{
+// NewApp creates a new CLI application
+func NewApp(name, description, version string) *App {
+	return &App{
 		Name:        name,
 		Description: description,
+		Version:     version,
 		Flags:       flag.NewFlagSet(name, flag.ExitOnError),
-		Subcommands: make(map[string]*Command),
-		Run:         run,
+		Commands:    make(map[string]*Command),
 	}
 }
 
-// AddSubcommand adds a subcommand to the command.
-func (c *Command) AddSubcommand(sub *Command) {
-	if _, exists := c.Subcommands[sub.Name]; !exists {
-		c.Subcommands[sub.Name] = sub
-		for _, alias := range sub.Aliases {
-			if _, aliasExists := c.Subcommands[alias]; !aliasExists {
-				c.Subcommands[alias] = sub
+// AddCommand adds a new command to the application
+func (a *App) AddCommand(cmd *Command) {
+	if _, exists := a.Commands[cmd.Name]; !exists {
+		a.Commands[cmd.Name] = cmd
+		for _, alias := range cmd.Aliases {
+			if _, exists := a.Commands[alias]; !exists {
+				a.Commands[alias] = cmd
 			}
 		}
 	}
 }
 
-// Execute parses the flags and executes the command or its subcommands.
-func (c *Command) Execute(ctx context.Context, args []string) error {
-	if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h")) {
-		if !c.DisableHelp {
-			c.PrintHelp()
+// SetDefaultRun sets the default run function for the application
+func (a *App) SetDefaultRun(run func(ctx context.Context, app *App) error) {
+	a.DefaultRun = run
+}
+
+// SetErrorHandler sets a custom error handling function
+func (a *App) SetErrorHandler(handler func(error)) {
+	a.ErrorHandler = handler
+}
+
+// SetBeforeRun sets a function to run before command execution
+func (a *App) SetBeforeRun(before func(ctx context.Context, app *App) error) {
+	a.BeforeRun = before
+}
+
+// SetAfterRun sets a function to run after command execution
+func (a *App) SetAfterRun(after func(ctx context.Context, app *App) error) {
+	a.AfterRun = after
+}
+
+// Run executes the application
+func (a *App) Run(ctx context.Context, args []string) error {
+	defer func() {
+		if r := recover(); r != nil {
+			xlog.Errorf("Panic recovered: %v", r)
+			if a.ErrorHandler != nil {
+				a.ErrorHandler(fmt.Errorf("panic: %v", r))
+			}
 		}
+	}()
+
+	if len(args) > 1 && args[1] == "--help" {
+		a.PrintCommandHelp(args[0])
+		return nil
+	}
+
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		a.PrintHelp()
 		return nil
 	}
 
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
-		fmt.Printf("%s version %s\n", c.Name, c.Version)
+		fmt.Printf("%s version %s\n", a.Name, a.Version)
 		return nil
 	}
 
-	cmdName := args[0]
-	if subcommand, exists := c.Subcommands[cmdName]; exists {
-		return subcommand.Execute(ctx, args[1:])
+	if err := a.Flags.Parse(args); err != nil {
+		return a.handleError(xerror.Wrap(err, "failed to parse flags"))
 	}
 
-	if err := c.Flags.Parse(args); err != nil {
-		return xerror.Wrap(err, "failed to parse flags")
-	}
-
-	cmdCtx := &CommandContext{
-		Command: c,
-		Flags:   c.Flags,
-		Args:    c.Flags.Args(),
-	}
-
-	if c.Run != nil {
-		startTime := time.Now()
-		err := c.Run(ctx, cmdCtx)
-		if debugMode {
-			fmt.Printf("Command execution time: %v\n", time.Since(startTime))
+	// Run BeforeRun function if set
+	if a.BeforeRun != nil {
+		if err := a.BeforeRun(ctx, a); err != nil {
+			return a.handleError(err)
 		}
-		return xerror.Wrap(err, "command execution failed")
 	}
 
-	return xerror.Errorf("unknown command: %s", cmdName)
+	var err error
+	if len(a.Flags.Args()) > 0 {
+		if cmd, exists := a.Commands[a.Flags.Arg(0)]; exists {
+			err = a.runCommand(ctx, cmd, a.Flags.Args()[1:])
+		} else {
+			err = fmt.Errorf("unknown command: %s", a.Flags.Arg(0))
+		}
+	} else if a.DefaultRun != nil {
+		startTime := time.Now()
+		err = a.DefaultRun(ctx, a)
+		if debugMode {
+			xlog.Infof("App execution time: %v", time.Since(startTime))
+		}
+	} else {
+		// If no DefaultRun is set, print help
+		a.PrintHelp()
+	}
+
+	// Run AfterRun function if set
+	if a.AfterRun != nil {
+		if afterErr := a.AfterRun(ctx, a); afterErr != nil {
+			if err == nil {
+				err = afterErr
+			} else {
+				xlog.Errorf("Error in AfterRun: %v", afterErr)
+			}
+		}
+	}
+
+	return a.handleError(err)
 }
 
-// PrintHelp prints the help message for the command and its subcommands.
-func (c *Command) PrintHelp() {
-	if c.CustomHelp != nil {
-		c.CustomHelp(c)
-		return
+// runCommand executes a command and its subcommands if any
+func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error {
+	if cmd.Flags == nil {
+		cmd.Flags = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
 	}
+	if err := cmd.Flags.Parse(args); err != nil {
+		return err
+	}
+	if len(cmd.Flags.Args()) > 0 && cmd.SubCommands != nil {
+		if subCmd, exists := cmd.SubCommands[cmd.Flags.Arg(0)]; exists {
+			return a.runCommand(ctx, subCmd, cmd.Flags.Args()[1:])
+		}
+	}
+	return cmd.Run(ctx, cmd, cmd.Flags.Args())
+}
 
-	xcolor.Println(xcolor.Bold, "\n%s", c.Name)
-	xcolor.Println(xcolor.Green, "%s\n", c.Description)
+// handleError processes the error and calls the error handling function if set
+func (a *App) handleError(err error) error {
+	if err != nil {
+		xlog.Errorf("Error: %v", err)
+		if a.ErrorHandler != nil {
+			a.ErrorHandler(err)
+		}
+	}
+	return err
+}
+
+// PrintHelp prints the help message for the application and its commands
+func (a *App) PrintHelp() {
+	xcolor.Println(xcolor.Bold, "\n%s", a.Name)
+	xcolor.Println(xcolor.Green, "%s\n", a.Description)
 
 	xcolor.Println(xcolor.Yellow, "Usage:")
-	xcolor.Println(xcolor.Cyan, "  %s [flags] [subcommand]", c.Name)
+	xcolor.Println(xcolor.Cyan, "  %s [flags] [command]", a.Name)
 	fmt.Println()
 
-	if c.Flags.NFlag() > 0 {
+	if a.Flags.NFlag() > 0 {
 		xcolor.Println(xcolor.Yellow, "Flags:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		c.Flags.VisitAll(func(f *flag.Flag) {
+		a.Flags.VisitAll(func(f *flag.Flag) {
 			fmt.Fprintf(w, "  -%s\t%s\t(default: %s)\n", f.Name, f.Usage, f.DefValue)
 		})
 		x.Must0(w.Flush())
 		fmt.Println()
 	}
 
-	if len(c.Subcommands) > 0 {
-		xcolor.Println(xcolor.Yellow, "Subcommands:")
+	if len(a.Commands) > 0 {
+		xcolor.Println(xcolor.Yellow, "Commands:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		uniqueCommands := make(map[string]*Command)
-		for name, sub := range c.Subcommands {
-			if !sub.Hidden && name == sub.Name {
-				uniqueCommands[name] = sub
-			}
-		}
 		var visibleCommands []*Command
-		for _, sub := range uniqueCommands {
-			visibleCommands = append(visibleCommands, sub)
+		for _, cmd := range a.Commands {
+			if !cmd.Hidden && cmd.Name == cmd.Name {
+				visibleCommands = append(visibleCommands, cmd)
+			}
 		}
 		sort.Slice(visibleCommands, func(i, j int) bool {
 			return visibleCommands[i].Name < visibleCommands[j].Name
 		})
-		for _, sub := range visibleCommands {
+		for _, cmd := range visibleCommands {
 			aliases := ""
-			if len(sub.Aliases) > 0 {
-				aliases = fmt.Sprintf(" (aliases: %s)", strings.Join(sub.Aliases, ", "))
+			if len(cmd.Aliases) > 0 {
+				aliases = fmt.Sprintf(" (aliases: %s)", strings.Join(cmd.Aliases, ", "))
 			}
-			fmt.Fprintf(w, "  %s\t%s%s\n", sub.Name, sub.Description, aliases)
+			fmt.Fprintf(w, "  %s\t%s%s\n", cmd.Name, cmd.Description, aliases)
 		}
 		x.Must0(w.Flush())
 		fmt.Println()
-	}
-}
-
-// Execute runs the root command with the provided arguments.
-func Execute(rootCmd *Command, args []string) {
-	ctx := context.Background()
-	if err := rootCmd.Execute(ctx, args); err != nil {
-		xcolor.Println(xcolor.Red, "Error: %s", err)
-		os.Exit(1)
 	}
 }
 
@@ -175,17 +236,36 @@ func EnableDebug(enable bool) {
 	debugMode = enable
 }
 
-// SetVersion sets the version of the command
-func (c *Command) SetVersion(version string) {
-	c.Version = version
-}
+// PrintCommandHelp prints help information for a specific command
+func (a *App) PrintCommandHelp(cmdName string) {
+	if cmd, exists := a.Commands[cmdName]; exists {
+		xcolor.Println(xcolor.Bold, "\n%s", cmd.Name)
+		xcolor.Println(xcolor.Green, "%s\n", cmd.Description)
 
-// SetAliases sets the aliases for the command
-func (c *Command) SetAliases(aliases ...string) {
-	c.Aliases = aliases
-}
+		xcolor.Println(xcolor.Yellow, "Usage:")
+		xcolor.Println(xcolor.Cyan, "  %s %s [flags] [subcommand]", a.Name, cmd.Name)
+		fmt.Println()
 
-// SetHidden sets whether the command should be hidden from help output
-func (c *Command) SetHidden(hidden bool) {
-	c.Hidden = hidden
+		if cmd.Flags != nil && cmd.Flags.NFlag() > 0 {
+			xcolor.Println(xcolor.Yellow, "Flags:")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			cmd.Flags.VisitAll(func(f *flag.Flag) {
+				fmt.Fprintf(w, "  -%s\t%s\t(default: %s)\n", f.Name, f.Usage, f.DefValue)
+			})
+			x.Must0(w.Flush())
+			fmt.Println()
+		}
+
+		if len(cmd.SubCommands) > 0 {
+			xcolor.Println(xcolor.Yellow, "Subcommands:")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			for _, subCmd := range cmd.SubCommands {
+				fmt.Fprintf(w, "  %s\t%s\n", subCmd.Name, subCmd.Description)
+			}
+			x.Must0(w.Flush())
+			fmt.Println()
+		}
+	} else {
+		fmt.Printf("Unknown command: %s\n", cmdName)
+	}
 }
