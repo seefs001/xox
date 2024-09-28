@@ -15,8 +15,9 @@ import (
 
 // Config holds the configuration values.
 type Config struct {
-	data map[string]any
-	mu   sync.RWMutex
+	data   map[string]any
+	mu     sync.RWMutex
+	prefix string
 }
 
 // defaultConfig is the default instance of Config.
@@ -43,35 +44,46 @@ func (c *Config) LoadFromJSON(jsonStr string) error {
 
 // LoadFromEnv loads configuration from environment variables or a specified file.
 func (c *Config) LoadFromEnv(options ...func(*Config)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Apply options first to set the prefix if any
 	for _, option := range options {
 		option(c)
 	}
+
+	// Load environment variables
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, value := parts[0], parts[1]
+
+		// If prefix is set, only load variables with that prefix
+		if c.prefix != "" {
+			if strings.HasPrefix(key, c.prefix) {
+				c.data[strings.TrimPrefix(key, c.prefix)] = value
+			}
+		} else {
+			// If no prefix is set, load all variables
+			c.data[key] = value
+		}
+	}
+
 	return nil
 }
 
 // WithEnvPrefix sets the prefix for environment variables.
 func WithEnvPrefix(prefix string) func(*Config) {
 	return func(c *Config) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, env := range os.Environ() {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			key, value := parts[0], parts[1]
-			if strings.HasPrefix(key, prefix) {
-				c.data[strings.TrimPrefix(key, prefix)] = value
-			}
-		}
+		c.prefix = prefix
 	}
 }
 
 // WithEnvFile loads configuration from a specified file.
 func WithEnvFile(filePath string) func(*Config) {
 	return func(c *Config) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
 		file, err := os.Open(filePath)
 		if err != nil {
 			xlog.Error("failed to open env file: %v", err)
@@ -209,6 +221,18 @@ func (c *Config) FlattenMap(data map[string]any, prefix string) {
 	}
 }
 
+// ParseToStruct parses the configuration to a struct.
+func (c *Config) ParseToStruct(result interface{}) error {
+	jsonData, err := json.Marshal(c.GetAll())
+	if err != nil {
+		return xerror.Wrap(err, "failed to marshal config data")
+	}
+	if err := json.Unmarshal(jsonData, result); err != nil {
+		return xerror.Wrap(err, "failed to unmarshal config data to struct")
+	}
+	return nil
+}
+
 // Default methods to interact with the defaultConfig instance
 
 func LoadFromJSON(jsonStr string) error {
@@ -253,6 +277,18 @@ func LoadFromStringMap(data map[string]string) {
 
 func GetAll() map[string]any {
 	return defaultConfig.GetAll()
+}
+
+// ParseToStruct parses the default configuration to a struct using generics.
+func ParseToStruct[T any]() (T, error) {
+	var result T
+	err := defaultConfig.ParseToStruct(&result)
+	return result, err
+}
+
+// LoadFromStructGeneric loads configuration from a struct using generics to the default config.
+func LoadFromStructGeneric[T any](s T) error {
+	return defaultConfig.LoadFromStruct(s)
 }
 
 // GetDefaultConfig returns the default configuration instance.

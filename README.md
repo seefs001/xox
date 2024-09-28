@@ -63,3 +63,9 @@ Each sub-package comes with its own set of examples demonstrating how to use its
 Each sub-package includes unit tests to ensure functionality and reliability. Tests can be found alongside their respective packages.
 
 To run all tests, navigate to the root directory and execute:
+
+
+## NEED FIX
+
+- xsupabase
+  - [ ] Improve request parameter logging for Supabase operations

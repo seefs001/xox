@@ -10,6 +10,7 @@ import (
 
 func TestLoadFromJSON(t *testing.T) {
 	config := xconfig.NewConfig()
+	xconfig.LoadFromEnv()
 	jsonStr := `{"key1": "value1", "key2": 2, "nested": {"key3": "value3"}}`
 	err := config.LoadFromJSON(jsonStr)
 	assert.NoError(t, err)

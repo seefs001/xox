@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xai"
 	"github.com/seefs001/xox/xenv"
 	"github.com/seefs001/xox/xlog"
@@ -14,9 +16,37 @@ func main() {
 	xenv.Load()
 	xlog.Info("Environment variables loaded")
 
-	client := xai.NewOpenAIClient(xai.WithDebug(true))
+	client := xai.NewOpenAIClient(xai.WithDebug(false))
 	xlog.Info("OpenAI client created with debug mode enabled")
 
+	req, err := client.GenerateImageWithMidjourney(context.Background(), "自分よりお酒が強い、見た目とのギャップが強い子 --ar 16:9 --q 2 --niji 6")
+	if err != nil {
+		xlog.Error("Error generating image", "error", err)
+		return
+	}
+	// req, err := client.ActMidjourney(context.Background(), "MJ::JOB::upsample::3::f5ab64bd-0682-472f-be83-de7a99735069", "1727477334464428")
+	// if err != nil {
+	// 	xlog.Error("Error generating image", "error", err)
+	// 	return
+	// }
+	xlog.Info("Image generation response:")
+	xlog.Info(x.MustToJSON(req))
+
+	for {
+		status, err := client.GetMidjourneyStatus(context.Background(), req.Result)
+		if err != nil {
+			xlog.Error("Error getting midjourney status", "error", err)
+			continue
+		}
+		if status.Status == "SUCCESS" {
+			xlog.Info("Midjourney status:", "status", status)
+			xlog.Info(x.MustToJSON(status))
+			break
+		}
+		xlog.Info("Midjourney status in progress:", "status", status)
+		time.Sleep(5 * time.Second)
+	}
+	return
 	// Text generation (non-streaming)
 	xlog.Info("Generating text using QuickGenerateText")
 	response, err := client.QuickGenerateText(context.Background(), []string{"Hello, world!"}, xai.WithTextModel(xai.ModelGPT4o))

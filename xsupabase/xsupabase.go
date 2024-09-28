@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,13 @@ import (
 	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xhttpc"
 	"github.com/seefs001/xox/xlog"
+)
+
+const (
+	defaultTimeout     = 30 * time.Second
+	defaultRetryCount  = 3
+	defaultMaxBackoff  = 5 * time.Second
+	defaultMaxBodySize = 1024
 )
 
 // Client represents a Supabase client
@@ -26,20 +34,24 @@ type Client struct {
 
 // NewClient creates a new Supabase client
 func NewClient(projectURL, apiKey string, options ...xhttpc.ClientOption) *Client {
-	httpClient := x.Must1(xhttpc.NewClient(append(options,
-		xhttpc.WithTimeout(30*time.Second),
+	defaultOptions := []xhttpc.ClientOption{
+		xhttpc.WithTimeout(defaultTimeout),
 		xhttpc.WithRetryConfig(xhttpc.RetryConfig{
 			Enabled:    true,
-			Count:      3,
-			MaxBackoff: 5 * time.Second,
+			Count:      defaultRetryCount,
+			MaxBackoff: defaultMaxBackoff,
 		}),
 		xhttpc.WithLogOptions(xhttpc.LogOptions{
-			LogHeaders:     true,
 			LogBody:        true,
 			LogResponse:    true,
-			MaxBodyLogSize: 1024,
+			MaxBodyLogSize: defaultMaxBodySize,
 		}),
-	)...))
+	}
+
+	// Append user-provided options after default options
+	allOptions := append(defaultOptions, options...)
+
+	httpClient := x.Must1(xhttpc.NewClient(allOptions...))
 
 	return &Client{
 		projectURL: strings.TrimRight(projectURL, "/"),
@@ -62,9 +74,9 @@ type QueryParams struct {
 
 // ErrorResponse represents an error response from the API
 type ErrorResponse struct {
-	Message string      `json:"message"`
-	Code    interface{} `json:"code"`
-	Details string      `json:"details,omitempty"`
+	Message   string      `json:"msg"`
+	Code      interface{} `json:"code"`
+	ErrorCode string      `json:"error_code"`
 }
 
 // User represents a user in the Supabase auth system
@@ -84,10 +96,9 @@ type User struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// SetDebug enables or disables debug mode
+// SetDebug enables or disables debug mode for xsupabase
 func (c *Client) SetDebug(debug bool) {
 	c.debug = debug
-	c.httpClient.SetDebug(debug)
 }
 
 // SupabaseResponse represents a response from the Supabase API
@@ -140,16 +151,13 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 		Data:   respBody,
 	}
 
-	if resp.StatusCode >= 400 {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err != nil {
-			return supaResp, xerror.Wrapf(err, "error unmarshaling error response (body: %s)", string(respBody))
-		}
+	var errResp ErrorResponse
+	if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Code != nil {
 		supaResp.Error = &errResp
+	}
 
-		codeStr := fmt.Sprintf("%v", errResp.Code)
-
-		return supaResp, xerror.NewWithCode(fmt.Sprintf("API error: %s (code: %s, details: %s)", errResp.Message, codeStr, errResp.Details), resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return supaResp, xerror.NewWithCode(fmt.Sprintf("API error: %s (code: %v, error_code: %s)", errResp.Message, errResp.Code, errResp.ErrorCode), resp.StatusCode)
 	}
 
 	return supaResp, nil
@@ -189,7 +197,7 @@ func (c *Client) Select(ctx context.Context, table string, params QueryParams) (
 
 	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, xerror.Wrap(err, "Select operation failed")
+		return nil, err
 	}
 
 	var records []Record
@@ -198,7 +206,7 @@ func (c *Client) Select(ctx context.Context, table string, params QueryParams) (
 	}
 
 	if c.debug {
-		xlog.Info("Select operation", "table", table, "params", params, "records_count", len(records), "status", supaResp.Status)
+		xlog.Debug("Select operation", "table", table, "params", params, "records_count", len(records), "status", supaResp.Status)
 	}
 
 	return records, nil
@@ -210,12 +218,12 @@ func (c *Client) Insert(ctx context.Context, table string, record Record) (Recor
 
 	supaResp, err := c.execute(ctx, http.MethodPost, path, record)
 	if err != nil {
-		return nil, xerror.Wrap(err, "Insert operation failed")
+		return nil, err
 	}
 
 	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Insert operation - empty response", "table", table, "record", record, "status", supaResp.Status)
+			xlog.Debug("Insert operation - empty response", "table", table, "record", record, "status", supaResp.Status)
 		}
 		return record, nil
 	}
@@ -226,7 +234,7 @@ func (c *Client) Insert(ctx context.Context, table string, record Record) (Recor
 	}
 
 	if c.debug {
-		xlog.Info("Insert operation", "table", table, "record", record, "inserted_record", insertedRecord, "status", supaResp.Status)
+		xlog.Debug("Insert operation", "table", table, "record", record, "inserted_record", insertedRecord, "status", supaResp.Status)
 	}
 
 	return insertedRecord, nil
@@ -238,12 +246,12 @@ func (c *Client) Update(ctx context.Context, table string, id interface{}, recor
 
 	supaResp, err := c.execute(ctx, http.MethodPatch, path, record)
 	if err != nil {
-		return nil, xerror.Wrap(err, "Update operation failed")
+		return nil, err
 	}
 
 	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Update operation - empty response", "table", table, "id", id, "record", record, "status", supaResp.Status)
+			xlog.Debug("Update operation - empty response", "table", table, "id", id, "record", record, "status", supaResp.Status)
 		}
 		return record, nil
 	}
@@ -254,7 +262,7 @@ func (c *Client) Update(ctx context.Context, table string, id interface{}, recor
 	}
 
 	if c.debug {
-		xlog.Info("Update operation", "table", table, "id", id, "record", record, "updated_record", updatedRecord, "status", supaResp.Status)
+		xlog.Debug("Update operation", "table", table, "id", id, "record", record, "updated_record", updatedRecord, "status", supaResp.Status)
 	}
 
 	return updatedRecord, nil
@@ -266,18 +274,18 @@ func (c *Client) Delete(ctx context.Context, table string, id interface{}) error
 
 	supaResp, err := c.execute(ctx, http.MethodDelete, path, nil)
 	if err != nil {
-		return xerror.Wrap(err, "Delete operation failed")
+		return err
 	}
 
 	if len(supaResp.Data) == 0 {
 		if c.debug {
-			xlog.Info("Delete operation - empty response", "table", table, "id", id, "status", supaResp.Status)
+			xlog.Debug("Delete operation - empty response", "table", table, "id", id, "status", supaResp.Status)
 		}
 		return nil
 	}
 
 	if c.debug {
-		xlog.Info("Delete operation", "table", table, "id", id, "response", string(supaResp.Data), "status", supaResp.Status)
+		xlog.Debug("Delete operation", "table", table, "id", id, "response", string(supaResp.Data), "status", supaResp.Status)
 	}
 
 	return nil
@@ -289,11 +297,11 @@ func (c *Client) ExecuteRPC(ctx context.Context, functionName string, params map
 
 	supaResp, err := c.execute(ctx, http.MethodPost, path, params)
 	if err != nil {
-		return nil, xerror.Wrap(err, "ExecuteRPC operation failed")
+		return nil, err
 	}
 
 	if c.debug {
-		xlog.Info("ExecuteRPC operation", "function", functionName, "params", params, "response", string(supaResp.Data), "status", supaResp.Status)
+		xlog.Debug("ExecuteRPC operation", "function", functionName, "params", params, "response", string(supaResp.Data), "status", supaResp.Status)
 	}
 
 	return supaResp.Data, nil
@@ -308,7 +316,7 @@ func (c *Client) Count(ctx context.Context, table string, filter string) (int, e
 
 	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return 0, xerror.Wrap(err, "Count operation failed")
+		return 0, err
 	}
 
 	var result []struct {
@@ -325,7 +333,7 @@ func (c *Client) Count(ctx context.Context, table string, filter string) (int, e
 	count := result[0].Count
 
 	if c.debug {
-		xlog.Info("Count operation", "table", table, "filter", filter, "count", count, "status", supaResp.Status)
+		xlog.Debug("Count operation", "table", table, "filter", filter, "count", count, "status", supaResp.Status)
 	}
 
 	return count, nil
@@ -340,7 +348,7 @@ func (c *Client) Upsert(ctx context.Context, table string, records []Record, onC
 
 	supaResp, err := c.execute(ctx, http.MethodPost, path, records)
 	if err != nil {
-		return nil, xerror.Wrap(err, "Upsert operation failed")
+		return nil, err
 	}
 
 	var upsertedRecords []Record
@@ -349,7 +357,7 @@ func (c *Client) Upsert(ctx context.Context, table string, records []Record, onC
 	}
 
 	if c.debug {
-		xlog.Info("Upsert operation", "table", table, "records_count", len(records), "on_conflict", onConflict, "upserted_records_count", len(upsertedRecords), "status", supaResp.Status)
+		xlog.Debug("Upsert operation", "table", table, "records_count", len(records), "on_conflict", onConflict, "upserted_records_count", len(upsertedRecords), "status", supaResp.Status)
 	}
 
 	return upsertedRecords, nil
@@ -361,7 +369,7 @@ func (c *Client) BatchOperation(ctx context.Context, table string, operations []
 
 	supaResp, err := c.execute(ctx, http.MethodPost, path, operations)
 	if err != nil {
-		return nil, xerror.Wrap(err, "BatchOperation failed")
+		return nil, err
 	}
 
 	var results []Record
@@ -370,7 +378,7 @@ func (c *Client) BatchOperation(ctx context.Context, table string, operations []
 	}
 
 	if c.debug {
-		xlog.Info("BatchOperation", "table", table, "operations_count", len(operations), "results_count", len(results), "status", supaResp.Status)
+		xlog.Debug("BatchOperation", "table", table, "operations_count", len(operations), "results_count", len(results), "status", supaResp.Status)
 	}
 
 	return results, nil
@@ -406,17 +414,20 @@ func (c *Client) AsyncDelete(ctx context.Context, table string, id interface{}) 
 }
 
 // CreateUser creates a new user
-func (c *Client) CreateUser(ctx context.Context, email, password string, userData Record) (*User, error) {
+func (c *Client) CreateUser(ctx context.Context, email, password string, options ...CreateUserOption) (*User, error) {
 	path := "/auth/v1/admin/users"
 	body := map[string]interface{}{
 		"email":    email,
 		"password": password,
-		"data":     userData,
+	}
+
+	for _, option := range options {
+		option(body)
 	}
 
 	supaResp, err := c.execute(ctx, http.MethodPost, path, body)
 	if err != nil {
-		return nil, xerror.Wrap(err, "CreateUser operation failed")
+		return nil, err
 	}
 
 	var user User
@@ -425,10 +436,48 @@ func (c *Client) CreateUser(ctx context.Context, email, password string, userDat
 	}
 
 	if c.debug {
-		xlog.Info("CreateUser operation", "email", email, "user_id", user.ID, "status", supaResp.Status)
+		xlog.Debug("CreateUser operation", "email", email, "user_id", user.ID, "status", supaResp.Status)
 	}
 
 	return &user, nil
+}
+
+// CreateUserOption defines the options for creating a user
+type CreateUserOption func(map[string]interface{})
+
+// WithUserMetadata sets the user metadata
+func WithUserMetadata(metadata map[string]interface{}) CreateUserOption {
+	return func(body map[string]interface{}) {
+		body["user_metadata"] = metadata
+	}
+}
+
+// WithAppMetadata sets the app metadata
+func WithAppMetadata(metadata map[string]interface{}) CreateUserOption {
+	return func(body map[string]interface{}) {
+		body["app_metadata"] = metadata
+	}
+}
+
+// WithPhone sets the user's phone number
+func WithPhone(phone string) CreateUserOption {
+	return func(body map[string]interface{}) {
+		body["phone"] = phone
+	}
+}
+
+// WithEmailConfirmed sets whether the email is confirmed
+func WithEmailConfirmed(confirmed bool) CreateUserOption {
+	return func(body map[string]interface{}) {
+		body["email_confirm"] = confirmed
+	}
+}
+
+// WithPhoneConfirmed sets whether the phone is confirmed
+func WithPhoneConfirmed(confirmed bool) CreateUserOption {
+	return func(body map[string]interface{}) {
+		body["phone_confirm"] = confirmed
+	}
 }
 
 // GetUser retrieves a user by ID
@@ -437,7 +486,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 
 	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, xerror.Wrap(err, "GetUser operation failed")
+		return nil, err
 	}
 
 	var user User
@@ -446,19 +495,24 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	if c.debug {
-		xlog.Info("GetUser operation", "user_id", userID, "status", supaResp.Status)
+		xlog.Debug("GetUser operation", "user_id", userID, "status", supaResp.Status)
 	}
 
 	return &user, nil
 }
 
 // UpdateUser updates a user's information
-func (c *Client) UpdateUser(ctx context.Context, userID string, updates Record) (*User, error) {
+func (c *Client) UpdateUser(ctx context.Context, userID string, options ...UpdateUserOption) (*User, error) {
 	path := fmt.Sprintf("/auth/v1/admin/users/%s", userID)
+	updates := make(map[string]interface{})
+
+	for _, option := range options {
+		option(updates)
+	}
 
 	supaResp, err := c.execute(ctx, http.MethodPut, path, updates)
 	if err != nil {
-		return nil, xerror.Wrap(err, "UpdateUser operation failed")
+		return nil, err
 	}
 
 	var user User
@@ -467,10 +521,41 @@ func (c *Client) UpdateUser(ctx context.Context, userID string, updates Record) 
 	}
 
 	if c.debug {
-		xlog.Info("UpdateUser operation", "user_id", userID, "updates", updates, "status", supaResp.Status)
+		xlog.Debug("UpdateUser operation", "user_id", userID, "updates", updates, "status", supaResp.Status)
 	}
 
 	return &user, nil
+}
+
+// UpdateUserOption defines the options for updating a user
+type UpdateUserOption func(map[string]interface{})
+
+// WithEmail updates the user's email
+func WithEmail(email string) UpdateUserOption {
+	return func(updates map[string]interface{}) {
+		updates["email"] = email
+	}
+}
+
+// WithPassword updates the user's password
+func WithPassword(password string) UpdateUserOption {
+	return func(updates map[string]interface{}) {
+		updates["password"] = password
+	}
+}
+
+// WithUserMetadataUpdate updates the user's metadata
+func WithUserMetadataUpdate(metadata map[string]interface{}) UpdateUserOption {
+	return func(updates map[string]interface{}) {
+		updates["user_metadata"] = metadata
+	}
+}
+
+// WithAppMetadataUpdate updates the app metadata
+func WithAppMetadataUpdate(metadata map[string]interface{}) UpdateUserOption {
+	return func(updates map[string]interface{}) {
+		updates["app_metadata"] = metadata
+	}
 }
 
 // DeleteUser deletes a user
@@ -479,23 +564,36 @@ func (c *Client) DeleteUser(ctx context.Context, userID string) error {
 
 	supaResp, err := c.execute(ctx, http.MethodDelete, path, nil)
 	if err != nil {
-		return xerror.Wrap(err, "DeleteUser operation failed")
+		return err
 	}
 
 	if c.debug {
-		xlog.Info("DeleteUser operation", "user_id", userID, "status", supaResp.Status)
+		xlog.Debug("DeleteUser operation", "user_id", userID, "status", supaResp.Status)
 	}
 
 	return nil
 }
 
 // ListUsers retrieves a list of users
-func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]User, error) {
-	path := fmt.Sprintf("/auth/v1/admin/users?page=%d&per_page=%d", page, perPage)
+func (c *Client) ListUsers(ctx context.Context, options ...ListUsersOption) ([]User, error) {
+	path := "/auth/v1/admin/users"
+	queryParams := make(map[string]string)
+
+	for _, option := range options {
+		option(queryParams)
+	}
+
+	if len(queryParams) > 0 {
+		query := url.Values{}
+		for key, value := range queryParams {
+			query.Add(key, value)
+		}
+		path += "?" + query.Encode()
+	}
 
 	supaResp, err := c.execute(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, xerror.Wrap(err, "ListUsers operation failed")
+		return nil, err
 	}
 
 	var users []User
@@ -504,8 +602,236 @@ func (c *Client) ListUsers(ctx context.Context, page, perPage int) ([]User, erro
 	}
 
 	if c.debug {
-		xlog.Info("ListUsers operation", "page", page, "per_page", perPage, "users_count", len(users), "status", supaResp.Status)
+		xlog.Debug("ListUsers operation", "users_count", len(users), "status", supaResp.Status)
 	}
 
 	return users, nil
+}
+
+// ListUsersOption defines the options for listing users
+type ListUsersOption func(map[string]string)
+
+// WithPage sets the page number for pagination
+func WithPage(page int) ListUsersOption {
+	return func(params map[string]string) {
+		params["page"] = strconv.Itoa(page)
+	}
+}
+
+// WithPerPage sets the number of users per page
+func WithPerPage(perPage int) ListUsersOption {
+	return func(params map[string]string) {
+		params["per_page"] = strconv.Itoa(perPage)
+	}
+}
+
+// WithUserMetadataFilter filters users based on metadata
+func WithUserMetadataFilter(key, value string) ListUsersOption {
+	return func(params map[string]string) {
+		params["user_metadata["+key+"]"] = value
+	}
+}
+
+// ExecuteGraphQL executes a GraphQL query or mutation
+func (c *Client) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) (json.RawMessage, error) {
+	path := "/graphql/v1"
+	body := map[string]interface{}{
+		"query":     query,
+		"variables": variables,
+	}
+
+	supaResp, err := c.execute(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.debug {
+		xlog.Debug("ExecuteGraphQL operation", "query", query, "variables", variables, "status", supaResp.Status)
+	}
+
+	return supaResp.Data, nil
+}
+
+// SubscribeToChanges subscribes to real-time changes in the specified table
+func (c *Client) SubscribeToChanges(ctx context.Context, table string, callback func(Record)) error {
+	// Implementation of real-time subscriptions would require WebSocket support
+	// This is a placeholder for future implementation
+	return xerror.New("SubscribeToChanges is not implemented yet")
+}
+
+// GetStoragePublicURL generates a public URL for a file in storage
+func (c *Client) GetStoragePublicURL(ctx context.Context, bucket, path string) (string, error) {
+	apiPath := fmt.Sprintf("/storage/v1/object/public/%s/%s", bucket, path)
+	return c.projectURL + apiPath, nil
+}
+
+// UploadFile uploads a file to storage
+func (c *Client) UploadFile(ctx context.Context, bucket, path string, file io.Reader) error {
+	apiPath := fmt.Sprintf("/storage/v1/object/%s/%s", bucket, path)
+
+	supaResp, err := c.execute(ctx, http.MethodPost, apiPath, file)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("UploadFile operation", "bucket", bucket, "path", path, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// DeleteFile deletes a file from storage
+func (c *Client) DeleteFile(ctx context.Context, bucket, path string) error {
+	apiPath := fmt.Sprintf("/storage/v1/object/%s/%s", bucket, path)
+
+	supaResp, err := c.execute(ctx, http.MethodDelete, apiPath, nil)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("DeleteFile operation", "bucket", bucket, "path", path, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// ListFiles lists files in a storage bucket
+func (c *Client) ListFiles(ctx context.Context, bucket string, prefix string) ([]string, error) {
+	apiPath := fmt.Sprintf("/storage/v1/object/list/%s", bucket)
+	if prefix != "" {
+		apiPath += "?prefix=" + url.QueryEscape(prefix)
+	}
+
+	supaResp, err := c.execute(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	if err := json.Unmarshal(supaResp.Data, &files); err != nil {
+		return nil, xerror.Wrapf(err, "error unmarshaling response (body: %s)", string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Debug("ListFiles operation", "bucket", bucket, "prefix", prefix, "files_count", len(files), "status", supaResp.Status)
+	}
+
+	return files, nil
+}
+
+// CreateBucket creates a new storage bucket
+func (c *Client) CreateBucket(ctx context.Context, bucketName string, isPublic bool) error {
+	apiPath := "/storage/v1/bucket"
+	body := map[string]interface{}{
+		"name":            bucketName,
+		"public":          isPublic,
+		"file_size_limit": 50 * 1024 * 1024, // 50MB default limit
+	}
+
+	supaResp, err := c.execute(ctx, http.MethodPost, apiPath, body)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("CreateBucket operation", "bucket", bucketName, "public", isPublic, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// DeleteBucket deletes a storage bucket
+func (c *Client) DeleteBucket(ctx context.Context, bucketName string) error {
+	apiPath := fmt.Sprintf("/storage/v1/bucket/%s", bucketName)
+
+	supaResp, err := c.execute(ctx, http.MethodDelete, apiPath, nil)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("DeleteBucket operation", "bucket", bucketName, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// GetBucketDetails retrieves details of a storage bucket
+func (c *Client) GetBucketDetails(ctx context.Context, bucketName string) (map[string]interface{}, error) {
+	apiPath := fmt.Sprintf("/storage/v1/bucket/%s", bucketName)
+
+	supaResp, err := c.execute(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var details map[string]interface{}
+	if err := json.Unmarshal(supaResp.Data, &details); err != nil {
+		return nil, xerror.Wrapf(err, "error unmarshaling response (body: %s)", string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Debug("GetBucketDetails operation", "bucket", bucketName, "status", supaResp.Status)
+	}
+
+	return details, nil
+}
+
+// UpdateBucketDetails updates details of a storage bucket
+func (c *Client) UpdateBucketDetails(ctx context.Context, bucketName string, updates map[string]interface{}) error {
+	apiPath := fmt.Sprintf("/storage/v1/bucket/%s", bucketName)
+
+	supaResp, err := c.execute(ctx, http.MethodPut, apiPath, updates)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("UpdateBucketDetails operation", "bucket", bucketName, "updates", updates, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// InviteUserByEmail invites a user to the project by email
+func (c *Client) InviteUserByEmail(ctx context.Context, email string, role string) error {
+	apiPath := "/auth/v1/invite"
+	body := map[string]interface{}{
+		"email": email,
+		"role":  role,
+	}
+
+	supaResp, err := c.execute(ctx, http.MethodPost, apiPath, body)
+	if err != nil {
+		return err
+	}
+
+	if c.debug {
+		xlog.Debug("InviteUserByEmail operation", "email", email, "role", role, "status", supaResp.Status)
+	}
+
+	return nil
+}
+
+// GetProjectSettings retrieves the project settings
+func (c *Client) GetProjectSettings(ctx context.Context) (map[string]interface{}, error) {
+	apiPath := "/rest/v1/settings"
+
+	supaResp, err := c.execute(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(supaResp.Data, &settings); err != nil {
+		return nil, xerror.Wrapf(err, "error unmarshaling response (body: %s)", string(supaResp.Data))
+	}
+
+	if c.debug {
+		xlog.Debug("GetProjectSettings operation", "status", supaResp.Status)
+	}
+
+	return settings, nil
 }

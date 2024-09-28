@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xenv"
 	"github.com/seefs001/xox/xhttpc"
 	"github.com/seefs001/xox/xlog"
@@ -40,6 +42,13 @@ func main() {
 		supabaseURL,
 		supabaseKey,
 		xhttpc.WithDebug(true),
+		xhttpc.WithLogOptions(xhttpc.LogOptions{
+			LogHeaders:      true,
+			LogBody:         true,
+			LogResponse:     true,
+			HeaderKeysToLog: []string{"Authorization", "apikey"},
+			MaxBodyLogSize:  300,
+		}),
 		xhttpc.WithTimeout(15*time.Second),
 	)
 
@@ -79,12 +88,12 @@ func main() {
 		xlog.Info("Updated user", "response", updateResp)
 
 		// Delete the user
-		err = client.Delete(ctx, "users", userID)
-		if err != nil {
-			xlog.Error("Failed to delete user", "error", err)
-			return
-		}
-		xlog.Info("User deleted successfully")
+		// err = client.Delete(ctx, "users", userID)
+		// if err != nil {
+		// 	xlog.Error("Failed to delete user", "error", err)
+		// 	return
+		// }
+		// xlog.Info("User deleted successfully")
 	} else {
 		xlog.Info("No users found to update or delete")
 	}
@@ -107,9 +116,9 @@ func main() {
 	// 	return
 	// }
 	// xlog.Info("RPC result", "response", string(rpcResp))
-
 	// Create a new user in the auth system
-	newAuthUser, err := client.CreateUser(ctx, "newuser@example.com", "password123", xsupabase.Record{"name": "New User"})
+	randomEmail := fmt.Sprintf("%s%d@gmail.com", x.Must1(x.RandomString(8, x.ModeAlpha)), x.Must1(x.RandomInt(100, 999)))
+	newAuthUser, err := client.CreateUser(ctx, randomEmail, "password123", xsupabase.WithUserMetadata(map[string]interface{}{"name": "New User"}))
 	if err != nil {
 		if strings.Contains(err.Error(), "User not allowed") {
 			xlog.Error("Failed to create new auth user: insufficient permissions. Make sure you're using an admin API key.", "error", err)
@@ -128,7 +137,10 @@ func main() {
 		xlog.Info("Fetched user", "user", fetchedUser)
 
 		// Update user
-		updatedUser, err := client.UpdateUser(ctx, newAuthUser.ID, xsupabase.Record{"name": "Updated New User"})
+		updateOption := func(updates map[string]interface{}) {
+			updates["user_metadata"] = map[string]interface{}{"name": "Updated New User"}
+		}
+		updatedUser, err := client.UpdateUser(ctx, newAuthUser.ID, updateOption)
 		if err != nil {
 			xlog.Error("Failed to update user", "error", err)
 			return
@@ -136,7 +148,7 @@ func main() {
 		xlog.Info("Updated auth user", "user", updatedUser)
 
 		// List users
-		users, err := client.ListUsers(ctx, 1, 10)
+		users, err := client.ListUsers(ctx, xsupabase.WithPage(1), xsupabase.WithPerPage(10))
 		if err != nil {
 			xlog.Error("Failed to list users", "error", err)
 			return

@@ -34,7 +34,7 @@ type LogConfig struct {
 func init() {
 	logConfig = LogConfig{
 		IncludeFileAndLine: true,
-		Level:              slog.LevelInfo,
+		Level:              slog.LevelDebug,
 	}
 	defaultLevel = logConfig.Level
 	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{

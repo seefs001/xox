@@ -2,16 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xenv"
 	"github.com/seefs001/xox/xlog"
 	"github.com/seefs001/xox/xtelebot"
@@ -208,43 +204,12 @@ func setCommands(ctx context.Context, bot *xtelebot.Bot) {
 		{Command: "deletecommands", Description: "Delete bot commands"},
 	}
 
-	params := url.Values{}
-	jsonCommands, _ := json.Marshal(commands)
-	params.Set(xtelebot.ParamCommands, string(jsonCommands))
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodSetMyCommands, params)
+	err := bot.SetMyCommands(ctx, commands)
 	if err != nil {
 		xlog.Error("Failed to set bot commands", "error", err)
 	} else {
 		xlog.Info("Bot commands set successfully")
 	}
-}
-
-func getUpdates(ctx context.Context, bot *xtelebot.Bot, offset int) ([]xtelebot.Update, error) {
-	params := url.Values{}
-	params.Set(xtelebot.ParamOffset, strconv.Itoa(offset))
-	params.Set(xtelebot.ParamLimit, "100")
-
-	body, err := bot.APIRequest(ctx, xtelebot.MethodGetUpdates, params)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Ok     bool              `json:"ok"`
-		Result []xtelebot.Update `json:"result"`
-	}
-
-	err = json.Unmarshal(body, &resp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if !resp.Ok {
-		return nil, fmt.Errorf("API response not OK")
-	}
-
-	return resp.Result, nil
 }
 
 func sendWelcomeMessage(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
@@ -265,12 +230,7 @@ func sendGreeting(ctx context.Context, bot *xtelebot.Bot, chatID interface{}, na
 
 func sendPhoto(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
 	photoURL := "https://www.google.com/images/branding/googlelogo/2x/googlelogo_light_color_272x92dp.png"
-	params := url.Values{}
-	params.Set(xtelebot.ParamChatID, fmt.Sprintf("%v", chatID))
-	params.Set(xtelebot.ParamPhoto, photoURL)
-	params.Set(xtelebot.ParamParseMode, "HTML")
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodSendPhoto, params)
+	_, err := bot.SendPhoto(ctx, chatID, photoURL)
 	if err != nil {
 		xlog.Error("Failed to send photo", "error", err)
 	}
@@ -278,12 +238,9 @@ func sendPhoto(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
 
 func sendLocation(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
 	// Coordinates for New York Times Square
-	params := url.Values{}
-	params.Set(xtelebot.ParamChatID, fmt.Sprintf("%v", chatID))
-	params.Set(xtelebot.ParamLatitude, "40.758896")
-	params.Set(xtelebot.ParamLongitude, "-73.985130")
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodSendLocation, params)
+	latitude := 40.758896
+	longitude := -73.985130
+	_, err := bot.SendLocation(ctx, chatID, latitude, longitude)
 	if err != nil {
 		xlog.Error("Failed to send location", "error", err)
 	}
@@ -300,12 +257,7 @@ func sendInlineKeyboard(ctx context.Context, bot *xtelebot.Bot, chatID interface
 		},
 	)
 
-	params := url.Values{}
-	params.Set(xtelebot.ParamChatID, fmt.Sprintf("%v", chatID))
-	params.Set(xtelebot.ParamText, "Here's an inline keyboard:")
-	params.Set(xtelebot.ParamReplyMarkup, string(x.MustToJSON(keyboard)))
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodSendMessage, params)
+	_, err := bot.SendMessage(ctx, chatID, "Here's an inline keyboard:", xtelebot.WithReplyMarkup(keyboard))
 	if err != nil {
 		xlog.Error("Failed to send message with keyboard", "error", err)
 	}
@@ -332,12 +284,9 @@ func handleCallbackQuery(ctx context.Context, bot *xtelebot.Bot, query *xtelebot
 		text = fmt.Sprintf("The current time is: %s", time.Now().Format(time.RFC3339))
 	case "location":
 		// Send a location as a new message
-		params := url.Values{}
-		params.Set(xtelebot.ParamChatID, fmt.Sprintf("%v", query.Message.Chat.ID))
-		params.Set(xtelebot.ParamLatitude, "40.758896")
-		params.Set(xtelebot.ParamLongitude, "-73.985130")
-
-		_, err := bot.APIRequest(ctx, xtelebot.MethodSendLocation, params)
+		latitude := 40.758896
+		longitude := -73.985130
+		_, err := bot.SendLocation(ctx, query.Message.Chat.ID, latitude, longitude)
 		if err != nil {
 			xlog.Error("Failed to send location", "error", err)
 		}
@@ -347,11 +296,7 @@ func handleCallbackQuery(ctx context.Context, bot *xtelebot.Bot, query *xtelebot
 	}
 
 	// Answer the callback query
-	params := url.Values{}
-	params.Set(xtelebot.ParamCallbackQueryID, query.ID)
-	params.Set(xtelebot.ParamText, text)
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodAnswerCallbackQuery, params)
+	err := bot.AnswerCallbackQuery(ctx, query.ID, xtelebot.WithCallbackQueryText(text))
 	if err != nil {
 		xlog.Error("Failed to answer callback query", "error", err)
 	}
@@ -365,7 +310,7 @@ func customErrorHandler(err error) {
 }
 
 func deleteCommands(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
-	_, err := bot.APIRequest(ctx, xtelebot.MethodDeleteMyCommands, nil)
+	err := bot.DeleteMyCommands(ctx)
 	if err != nil {
 		xlog.Error("Failed to delete bot commands", "error", err)
 		sendMessage(ctx, bot, chatID, "Failed to delete bot commands")
@@ -376,11 +321,7 @@ func deleteCommands(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) 
 }
 
 func sendMessage(ctx context.Context, bot *xtelebot.Bot, chatID interface{}, text string) {
-	params := url.Values{}
-	params.Set(xtelebot.ParamChatID, fmt.Sprintf("%v", chatID))
-	params.Set(xtelebot.ParamText, text)
-
-	_, err := bot.APIRequest(ctx, xtelebot.MethodSendMessage, params)
+	_, err := bot.SendMessage(ctx, chatID, text)
 	if err != nil {
 		xlog.Error("Failed to send message", "error", err)
 	}

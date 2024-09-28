@@ -366,3 +366,52 @@ func ConvertStruct(src any, dst any) error {
 
 	return nil
 }
+
+// StringToStruct converts a string to a struct of type T.
+// It uses json.Unmarshal to perform the conversion.
+//
+// Example:
+//
+//	type Person struct {
+//		Name string `json:"name"`
+//		Age  int    `json:"age"`
+//	}
+//
+//	jsonStr := `{"name":"Alice","age":30}`
+//	person, err := StringToStruct[Person](jsonStr)
+//	if err != nil {
+//		// handle error
+//	}
+//	fmt.Printf("%+v\n", person) // Output: {Name:Alice Age:30}
+func StringToStruct[T any](s string) (T, error) {
+	var result T
+	err := json.Unmarshal([]byte(s), &result)
+	if err != nil {
+		return result, xerror.Wrap(err, "failed to convert string to struct")
+	}
+	return result, nil
+}
+
+// StructToString converts a struct of type T to a string.
+// It uses json.Marshal to perform the conversion.
+//
+// Example:
+//
+//	type Person struct {
+//		Name string `json:"name"`
+//		Age  int    `json:"age"`
+//	}
+//
+//	person := Person{Name: "Bob", Age: 25}
+//	jsonStr, err := StructToString(person)
+//	if err != nil {
+//		// handle error
+//	}
+//	fmt.Println(jsonStr) // Output: {"name":"Bob","age":25}
+func StructToString[T any](v T) (string, error) {
+	bytes, err := json.Marshal(v)
+	if err != nil {
+		return "", xerror.Wrap(err, "failed to convert struct to string")
+	}
+	return string(bytes), nil
+}
