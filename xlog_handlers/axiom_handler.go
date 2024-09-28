@@ -14,16 +14,18 @@ import (
 )
 
 type AxiomHandler struct {
-	client     *xhttpc.Client
-	dataset    string
-	debug      bool
-	logOptions xhttpc.LogOptions
-	buffer     []map[string]interface{}
-	bufferSize int
-	mu         sync.Mutex
-	sending    bool
-	shutdownCh chan struct{}
-	wg         sync.WaitGroup
+	client        *xhttpc.Client
+	dataset       string
+	debug         bool
+	logOptions    xhttpc.LogOptions
+	buffer        []map[string]interface{}
+	bufferSize    int
+	mu            sync.Mutex
+	sending       bool
+	shutdownCh    chan struct{}
+	wg            sync.WaitGroup
+	flushInterval time.Duration
+	done          chan struct{} // Add this line
 }
 
 func NewAxiomHandler(apiToken, dataset string) *AxiomHandler {
@@ -31,13 +33,17 @@ func NewAxiomHandler(apiToken, dataset string) *AxiomHandler {
 		xhttpc.WithBearerToken(apiToken),
 		xhttpc.WithBaseURL("https://api.axiom.co"),
 	))
-	return &AxiomHandler{
-		client:     client,
-		dataset:    dataset,
-		buffer:     make([]map[string]interface{}, 0),
-		bufferSize: 100, // Adjust this value as needed
-		shutdownCh: make(chan struct{}),
+	h := &AxiomHandler{
+		client:        client,
+		dataset:       dataset,
+		buffer:        make([]map[string]interface{}, 0),
+		bufferSize:    100, // Adjust this value as needed
+		shutdownCh:    make(chan struct{}),
+		flushInterval: 10 * time.Second,    // Default flush interval
+		done:          make(chan struct{}), // Add this line
 	}
+	h.startFlusher() // Add this line
+	return h
 }
 
 func (h *AxiomHandler) Enabled(_ context.Context, _ slog.Level) bool {
@@ -139,25 +145,19 @@ func (h *AxiomHandler) SetLogOptions(options xhttpc.LogOptions) {
 }
 
 func (h *AxiomHandler) Shutdown() error {
+	close(h.done) // Signal the flusher to stop
 	close(h.shutdownCh)
 	h.wg.Wait()
 
 	// Flush any remaining logs
-	h.mu.Lock()
-	remainingLogs := h.buffer
-	h.buffer = nil
-	h.mu.Unlock()
+	h.flush()
 
-	if len(remainingLogs) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return h.sendLogsImmediate(ctx, remainingLogs)
-	}
 	return nil
 }
 
 func (h *AxiomHandler) sendLogsImmediate(ctx context.Context, logs []map[string]interface{}) error {
 	url := fmt.Sprintf("/v1/datasets/%s/ingest", h.dataset)
+	h.client.SetForceContentType("application/json")
 	resp, err := h.client.Post(ctx, url, logs)
 	if err != nil {
 		return xerror.Wrap(err, "failed to send log to Axiom immediately")
@@ -168,4 +168,44 @@ func (h *AxiomHandler) sendLogsImmediate(ctx context.Context, logs []map[string]
 		return xerror.Errorf("Axiom API error: %s", resp.Status)
 	}
 	return nil
+}
+
+// SetFlushInterval sets the interval at which logs are flushed to Axiom
+func (h *AxiomHandler) SetFlushInterval(interval time.Duration) {
+	h.flushInterval = interval
+}
+
+func (h *AxiomHandler) startFlusher() {
+	go func() {
+		ticker := time.NewTicker(h.flushInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				h.flush()
+			case <-h.done:
+				return
+			}
+		}
+	}()
+}
+
+// Add this method
+func (h *AxiomHandler) flush() {
+	h.mu.Lock()
+	if len(h.buffer) == 0 {
+		h.mu.Unlock()
+		return
+	}
+	logs := h.buffer
+	h.buffer = make([]map[string]interface{}, 0)
+	h.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := h.sendLogsImmediate(ctx, logs); err != nil {
+		xlog.Error("Error flushing logs to Axiom", "error", err)
+	}
 }

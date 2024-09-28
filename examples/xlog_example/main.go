@@ -2,7 +2,11 @@ package main
 
 import (
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"log/slog"
 
 	"github.com/seefs001/xox/xenv"
 	"github.com/seefs001/xox/xhttpc"
@@ -13,20 +17,29 @@ import (
 func main() {
 	xenv.Load()
 
+	// Set console format to put source at the beginning, followed by level, then time
+	xlog.SetConsoleFormat("%s[%l] [%t] %m%a")
+
 	// Use the default console logger
 	xlog.Info("This is an info message")
 	xlog.Warn("This is a warning message")
 	xlog.Error("This is an error message")
 
-	// Add a file logger
+	// Add a rotating file logger
 	err := xlog.AddRotatingFile(xlog.FileConfig{
-		Filename:   "app.log",
+		Filename:   "logs/rotating_app.log",
 		MaxSize:    10 * 1024 * 1024, // 10MB
 		MaxBackups: 3,
 		MaxAge:     7, // 7 days
 	})
 	if err != nil {
-		xlog.Error("Failed to add file logger", "error", err)
+		xlog.Error("Failed to add rotating file logger", "error", err)
+	}
+
+	// Add a fixed file logger
+	err = xlog.AddFixedFile("logs/fixed_app.log", slog.LevelDebug)
+	if err != nil {
+		xlog.Error("Failed to add fixed file logger", "error", err)
 	}
 
 	// Add Axiom handler if environment variables are set
@@ -46,11 +59,14 @@ func main() {
 			HeaderKeysToLog: []string{"Content-Type", "Authorization"},
 		})
 
+		// Set Axiom flush interval to 5 seconds (adjust as needed)
+		axiomHandler.SetFlushInterval(5 * time.Second)
+
 		xlog.Add(axiomHandler)
 		xlog.Info("Axiom handler added")
 	}
 
-	// Now logs will be output to console, file, and Axiom (if configured)
+	// Now logs will be output to console, rotating file, fixed file, and Axiom (if configured)
 	xlog.Info("This message will be logged to all configured handlers")
 
 	// Use the Catch function to wrap operations that may produce errors
@@ -59,9 +75,37 @@ func main() {
 		return nil // or return an error
 	})
 
-	// Add a small delay to allow logs to be sent
-	time.Sleep(2 * time.Second)
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Gracefully shutdown all handlers
-	xlog.Shutdown()
+	// Create a done channel to signal when shutdown is complete
+	done := make(chan bool, 1)
+
+	// Start a goroutine to handle shutdown
+	go func() {
+		// Wait for interrupt signal
+		<-sigChan
+		xlog.Info("Shutting down application")
+
+		// Perform shutdown tasks
+		if err := xlog.Shutdown(); err != nil {
+			xlog.Error("Failed to shutdown logger", "error", err)
+		}
+
+		// Signal that shutdown is complete
+		done <- true
+	}()
+
+	// Main application loop
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			// Your application logic here
+			xlog.Info("Application is running")
+			time.Sleep(1 * time.Second) // Changed from 5 seconds to 1 second for more frequent logging
+		}
+	}
 }

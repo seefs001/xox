@@ -38,8 +38,12 @@ func NewContainer() *Container {
 	return &Container{
 		services:        make(map[string]any),
 		invokedServices: make(map[string]bool),
-		logf:            defaultContainer.logf,
+		logf:            func(format string, args ...any) {},
 	}
+}
+
+func GetDefaultContainer() *Container {
+	return defaultContainer
 }
 
 func SetLogger(logf func(format string, args ...any)) {
