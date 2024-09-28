@@ -17,6 +17,28 @@ import (
 	"github.com/seefs001/xox/xerror"
 )
 
+// OnlyErr returns only the error from a function that returns multiple values,
+// where the last value is an error. It discards all other return values.
+//
+// Example:
+//
+//	err := OnlyErr(SomeFunction())
+//	if err != nil {
+//		// handle error
+//	}
+func OnlyErr(values ...interface{}) error {
+	if len(values) == 0 {
+		return nil
+	}
+
+	lastValue := values[len(values)-1]
+	if err, ok := lastValue.(error); ok {
+		return err
+	}
+
+	return nil
+}
+
 // Must1 returns the result if no error occurred.
 // If an error occurred, it panics with the error.
 //
