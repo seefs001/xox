@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xenv"
+	"github.com/seefs001/xox/xhttpc"
 	"github.com/seefs001/xox/xlog"
 	"github.com/seefs001/xox/xtelebot"
 )
@@ -231,7 +233,20 @@ func sendGreeting(ctx context.Context, bot *xtelebot.Bot, chatID interface{}, na
 
 func sendPhoto(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {
 	photoURL := "https://www.google.com/images/branding/googlelogo/2x/googlelogo_light_color_272x92dp.png"
-	_, err := bot.SendPhoto(ctx, chatID, photoURL)
+	resp, err := x.Must1(xhttpc.NewClient()).Get(ctx, photoURL)
+	if err != nil {
+		xlog.Error("Failed to download photo", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	_, err = bot.SendPhoto(ctx, chatID, resp.Body)
+	if err != nil {
+		xlog.Error("Failed to send photo", "error", err)
+	}
+
+	// Send photo by URL
+	_, err = bot.SendPhoto(ctx, chatID, photoURL)
 	if err != nil {
 		xlog.Error("Failed to send photo", "error", err)
 	}

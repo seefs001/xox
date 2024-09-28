@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xcast"
 	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xlog"
@@ -1053,4 +1054,11 @@ func (c *Client) createRequestWithBody(ctx context.Context, method, url string, 
 func (c *Client) SetForceContentType(contentType string) *Client {
 	c.forceContentType = contentType
 	return c
+}
+
+var defaultClient = x.Must1(NewClient())
+
+// GetDefaultClient returns the default client
+func GetDefaultClient() *Client {
+	return defaultClient
 }

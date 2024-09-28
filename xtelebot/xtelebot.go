@@ -1,10 +1,12 @@
 package xtelebot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -397,11 +399,7 @@ func (b *Bot) GetUpdates(ctx context.Context, offset int, limit int) ([]Update, 
 }
 
 // SendPhoto sends a photo to a chat
-func (b *Bot) SendPhoto(ctx context.Context, chatIDOrUsername interface{}, photo string, options ...MessageOption) (*Message, error) {
-	if photo == "" {
-		return nil, fmt.Errorf("photo cannot be empty")
-	}
-
+func (b *Bot) SendPhoto(ctx context.Context, chatIDOrUsername interface{}, photo interface{}, options ...MessageOption) (*Message, error) {
 	params := url.Values{}
 	switch v := chatIDOrUsername.(type) {
 	case int64:
@@ -411,43 +409,56 @@ func (b *Bot) SendPhoto(ctx context.Context, chatIDOrUsername interface{}, photo
 	default:
 		return nil, fmt.Errorf("chat_id must be either int64 or string")
 	}
-	params.Set(ParamPhoto, photo)
 
 	for _, option := range options {
 		option(params)
 	}
 
-	body, err := b.APIRequest(ctx, MethodSendPhoto, params)
+	var resp *http.Response
+	var err error
+
+	switch v := photo.(type) {
+	case string:
+		// If photo is a string, assume it's a file_id or URL
+		params.Set(ParamPhoto, v)
+		body, err := b.APIRequest(ctx, MethodSendPhoto, params)
+		if err != nil {
+			return nil, err
+		}
+		resp = &http.Response{
+			Body: io.NopCloser(bytes.NewReader(body)),
+		}
+	case io.Reader:
+		// If photo is an io.Reader, upload it as a file
+		resp, err = b.uploadFile(ctx, MethodSendPhoto, params, ParamPhoto, "photo.jpg", v)
+	default:
+		return nil, fmt.Errorf("photo must be either a string (file_id or URL) or io.Reader")
+	}
+
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
-	var resp struct {
+	var result struct {
 		Ok     bool    `json:"ok"`
 		Result Message `json:"result"`
 	}
 
-	err = json.Unmarshal(body, &resp)
+	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
-		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
-		return nil, err
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if !resp.Ok {
-		err := fmt.Errorf("API response not OK")
-		b.errorHandler(err)
-		return nil, err
+	if !result.Ok {
+		return nil, fmt.Errorf("API response not OK")
 	}
 
-	return &resp.Result, nil
+	return &result.Result, nil
 }
 
 // SendDocument sends a document to a chat
-func (b *Bot) SendDocument(ctx context.Context, chatIDOrUsername interface{}, document string, options ...MessageOption) (*Message, error) {
-	if document == "" {
-		return nil, fmt.Errorf("document cannot be empty")
-	}
-
+func (b *Bot) SendDocument(ctx context.Context, chatIDOrUsername interface{}, document interface{}, options ...MessageOption) (*Message, error) {
 	params := url.Values{}
 	switch v := chatIDOrUsername.(type) {
 	case int64:
@@ -457,35 +468,53 @@ func (b *Bot) SendDocument(ctx context.Context, chatIDOrUsername interface{}, do
 	default:
 		return nil, fmt.Errorf("chat_id must be either int64 or string")
 	}
-	params.Set(ParamDocument, document)
 
 	for _, option := range options {
 		option(params)
 	}
 
-	body, err := b.APIRequest(ctx, MethodSendDocument, params)
-	if err != nil {
-		return nil, err
+	var resp *http.Response
+	var err error
+	var body []byte
+
+	switch v := document.(type) {
+	case string:
+		// If document is a string, assume it's a file_id or URL
+		params.Set(ParamDocument, v)
+		body, err = b.APIRequest(ctx, MethodSendDocument, params)
+		if err != nil {
+			return nil, err
+		}
+	case io.Reader:
+		// If document is an io.Reader, upload it as a file
+		resp, err = b.uploadFile(ctx, MethodSendDocument, params, ParamDocument, "document", v)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("document must be either a string (file_id or URL) or io.Reader")
 	}
 
-	var resp struct {
+	var result struct {
 		Ok     bool    `json:"ok"`
 		Result Message `json:"result"`
 	}
 
-	err = json.Unmarshal(body, &resp)
+	err = json.Unmarshal(body, &result)
 	if err != nil {
-		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
-		return nil, err
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if !resp.Ok {
-		err := fmt.Errorf("API response not OK")
-		b.errorHandler(err)
-		return nil, err
+	if !result.Ok {
+		return nil, fmt.Errorf("API response not OK")
 	}
 
-	return &resp.Result, nil
+	return &result.Result, nil
 }
 
 // SendLocation sends a location to a chat
@@ -1432,4 +1461,45 @@ func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan
 	}()
 
 	return updates, nil
+}
+
+// uploadFile uploads a file using multipart/form-data
+func (b *Bot) uploadFile(ctx context.Context, method string, params url.Values, fieldName string, fileName string, fileData io.Reader) (*http.Response, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add the file
+	part, err := writer.CreateFormFile(fieldName, fileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+	_, err = io.Copy(part, fileData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy file data: %w", err)
+	}
+
+	// Add other fields
+	for key, values := range params {
+		for _, value := range values {
+			err := writer.WriteField(key, value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to write field: %w", err)
+			}
+		}
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/bot%s/%s", b.baseURL, b.token, method)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	return b.client.Do(req)
 }
