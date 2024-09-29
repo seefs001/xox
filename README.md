@@ -69,3 +69,12 @@ To run all tests, navigate to the root directory and execute:
 
 - xsupabase
   - [ ] Improve request parameter logging for Supabase operations
+
+
+- unit test need fix
+  - [ ] xd
+  - [ ] xlog
+  - [ ] xmw
+  - [ ] xsqlbuilder
+  - [ ] xsched
+  - [ ] xvalidator

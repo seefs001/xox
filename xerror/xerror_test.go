@@ -114,3 +114,74 @@ type temporaryError struct{}
 
 func (e *temporaryError) Error() string   { return "temporary error" }
 func (e *temporaryError) Temporary() bool { return true }
+
+func TestWrapf(t *testing.T) {
+	originalErr := errors.New("original error")
+	wrappedErr := xerror.Wrapf(originalErr, "wrapped error %d", 1)
+	assert.NotNil(t, wrappedErr)
+	assert.Contains(t, wrappedErr.Err.Error(), "wrapped error 1: original error")
+}
+
+func TestNewf(t *testing.T) {
+	err := xerror.Newf("error %d: %s", 1, "test")
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "error 1: test")
+}
+
+func TestErrorf(t *testing.T) {
+	err := xerror.Errorf("error %d: %s", 1, "test")
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "error 1: test")
+}
+
+func TestPanicIfError(t *testing.T) {
+	assert.NotPanics(t, func() {
+		xerror.PanicIfError(nil)
+	})
+	assert.Panics(t, func() {
+		xerror.PanicIfError(errors.New("test error"))
+	})
+}
+
+func TestRecoverError(t *testing.T) {
+	var err error
+	func() {
+		defer xerror.RecoverError(&err)
+		panic("test panic")
+	}()
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "test panic")
+}
+
+func TestMustNoError(t *testing.T) {
+	result := xerror.MustNoError(42, nil)
+	assert.Equal(t, 42, result)
+	assert.Panics(t, func() {
+		xerror.MustNoError(0, errors.New("test error"))
+	})
+}
+
+func TestCause(t *testing.T) {
+	rootErr := errors.New("root error")
+	wrappedErr := xerror.Wrap(rootErr, "wrapped error")
+	cause := xerror.Cause(wrappedErr)
+	assert.Equal(t, rootErr, cause)
+}
+
+func TestJoin(t *testing.T) {
+	err1 := errors.New("error 1")
+	err2 := errors.New("error 2")
+	joinedErr := xerror.Join(err1, err2)
+	assert.NotNil(t, joinedErr)
+	assert.Contains(t, joinedErr.Error(), "error 1")
+	assert.Contains(t, joinedErr.Error(), "error 2")
+}
+
+func TestWithStack(t *testing.T) {
+	err := errors.New("test error")
+	stackErr := xerror.WithStack(err)
+	assert.NotNil(t, stackErr)
+	xerr, ok := stackErr.(*xerror.Error)
+	assert.True(t, ok)
+	assert.NotEmpty(t, xerr.Stack)
+}

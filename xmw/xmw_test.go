@@ -280,3 +280,134 @@ func TestGzipResponseWriter(t *testing.T) {
 		t.Error("GzipResponseWriter did not correctly write the response")
 	}
 }
+
+func TestRateLimitWithCustomKeyFunc(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	customKeyFunc := func(r *http.Request) string {
+		return r.Header.Get("X-API-Key")
+	}
+
+	rateLimitMiddleware := RateLimit(RateLimitConfig{
+		Max:      2,
+		Duration: time.Minute,
+		KeyFunc:  customKeyFunc,
+	})
+
+	finalHandler := rateLimitMiddleware(handler)
+
+	makeRequest := func(apiKey string) int {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-API-Key", apiKey)
+		rec := httptest.NewRecorder()
+		finalHandler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Requests with the same API key
+	if makeRequest("key1") != http.StatusOK {
+		t.Error("First request should be allowed")
+	}
+	if makeRequest("key1") != http.StatusOK {
+		t.Error("Second request should be allowed")
+	}
+	if makeRequest("key1") != http.StatusTooManyRequests {
+		t.Error("Third request should be rate limited")
+	}
+
+	// Requests with a different API key
+	if makeRequest("key2") != http.StatusOK {
+		t.Error("First request with different key should be allowed")
+	}
+}
+
+func TestSessionMiddleware(t *testing.T) {
+	store := NewMemoryStore()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sm := GetSessionManager(r)
+		if sm == nil {
+			t.Error("SessionManager should be available in the request context")
+		}
+
+		// Test setting and getting a session value
+		sm.Set(r, "testKey", "testValue")
+		value, ok := sm.Get(r, "testKey")
+		if !ok || value != "testValue" {
+			t.Error("Failed to set or get session value")
+		}
+
+		// Test deleting a session value
+		sm.Delete(r, "testKey")
+		_, ok = sm.Get(r, "testKey")
+		if ok {
+			t.Error("Failed to delete session value")
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	sessionMiddleware := Session(SessionConfig{
+		Store:      store,
+		CookieName: "test_session",
+	})
+
+	finalHandler := sessionMiddleware(handler)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	finalHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	// Check if a session cookie was set
+	cookies := rec.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, cookie := range cookies {
+		if cookie.Name == "test_session" {
+			sessionCookie = cookie
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Error("Session cookie was not set")
+	}
+}
+
+func TestLoggerWithCustomLogHandler(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var loggedMsg string
+	var loggedAttrs map[string]interface{}
+
+	customLogHandler := func(msg string, attrs map[string]interface{}) {
+		loggedMsg = msg
+		loggedAttrs = attrs
+	}
+
+	loggerMiddleware := Logger(LoggerConfig{
+		Format:     "${method} ${path}",
+		LogHandler: customLogHandler,
+	})
+
+	finalHandler := loggerMiddleware(handler)
+
+	req := httptest.NewRequest("GET", "/test-path", nil)
+	rec := httptest.NewRecorder()
+
+	finalHandler.ServeHTTP(rec, req)
+
+	if loggedMsg != "GET /test-path" {
+		t.Errorf("Expected logged message 'GET /test-path', got '%s'", loggedMsg)
+	}
+
+	if loggedAttrs["method"] != "GET" || loggedAttrs["path"] != "/test-path" {
+		t.Error("Logger did not correctly populate attributes")
+	}
+}

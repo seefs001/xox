@@ -3,7 +3,7 @@ package xcolor
 import (
 	"fmt"
 	"os"
-	"strings"
+	"regexp"
 )
 
 // ColorCode represents ANSI color codes
@@ -23,7 +23,8 @@ const (
 )
 
 var (
-	colorEnabled = true
+	colorEnabled   = true
+	ansiColorRegex = regexp.MustCompile(`\x1b\[[0-9;]*[mK]`)
 )
 
 // EnableColor enables or disables color output
@@ -55,7 +56,11 @@ func Print(color ColorCode, format string, a ...interface{}) {
 
 // Println prints text with the specified color if color is enabled, followed by a newline
 func Println(color ColorCode, format string, a ...interface{}) {
-	Print(color, format+"\n", a...)
+	if colorEnabled {
+		fmt.Print(string(color) + fmt.Sprintf(format, a...) + string(Reset) + "\n")
+	} else {
+		fmt.Printf(format+"\n", a...)
+	}
 }
 
 // Sprint returns a string with the specified color if color is enabled
@@ -79,7 +84,7 @@ func AutoEnableColor() {
 
 // StripColor removes ANSI color codes from the given string
 func StripColor(s string) string {
-	return strings.ReplaceAll(s, "\033[", "")
+	return ansiColorRegex.ReplaceAllString(s, "")
 }
 
 // ColorizeMulti applies multiple colors to the text
@@ -109,7 +114,15 @@ func PrintMulti(colors []ColorCode, format string, a ...interface{}) {
 
 // PrintlnMulti prints text with multiple specified colors if color is enabled, followed by a newline
 func PrintlnMulti(colors []ColorCode, format string, a ...interface{}) {
-	PrintMulti(colors, format+"\n", a...)
+	if colorEnabled {
+		colorStr := ""
+		for _, color := range colors {
+			colorStr += string(color)
+		}
+		fmt.Print(colorStr + fmt.Sprintf(format, a...) + string(Reset) + "\n")
+	} else {
+		fmt.Printf(format+"\n", a...)
+	}
 }
 
 // SprintMulti returns a string with multiple specified colors if color is enabled
@@ -137,5 +150,5 @@ func PrintRainbow(format string, a ...interface{}) {
 
 // PrintlnRainbow prints text with each character in a different color, followed by a newline
 func PrintlnRainbow(format string, a ...interface{}) {
-	PrintRainbow(format+"\n", a...)
+	fmt.Println(Rainbow(fmt.Sprintf(format, a...)))
 }

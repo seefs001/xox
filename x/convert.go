@@ -1,7 +1,6 @@
 package x
 
 import (
-	"encoding/json"
 	"reflect"
 	"strconv"
 	"strings"
@@ -61,11 +60,6 @@ func StringToMap(s, pairSep, kvSep string) map[string]string {
 		}
 	}
 	return m
-}
-
-// UnmarshalJSON unmarshals JSON data into a value
-func UnmarshalJSON(data []byte, v interface{}) error {
-	return xerror.Wrap(json.Unmarshal(data, v), "error unmarshaling JSON")
 }
 
 // BindData binds data from a map to a struct based on tags

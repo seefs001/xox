@@ -498,7 +498,7 @@ func (m *MemoryStore) Get(sessionID string) (map[string]interface{}, error) {
 	defer m.mu.RUnlock()
 	session, ok := m.sessions[sessionID]
 	if !ok {
-		return nil, xerror.New("session not found")
+		return nil, xerror.ErrNotFound
 	}
 	return session, nil
 }
@@ -539,6 +539,18 @@ type SessionManager struct {
 
 // NewSessionManager creates a new SessionManager
 func NewSessionManager(store SessionStore, cookieName string, maxAge int, sessionName string) *SessionManager {
+	if store == nil {
+		store = NewMemoryStore()
+	}
+	if cookieName == "" {
+		cookieName = "session_id"
+	}
+	if maxAge <= 0 {
+		maxAge = 86400 // 1 day default
+	}
+	if sessionName == "" {
+		sessionName = DefaultSessionName
+	}
 	return &SessionManager{
 		store:       store,
 		cookieName:  cookieName,
@@ -614,23 +626,30 @@ func Session(config ...SessionConfig) Middleware {
 				return
 			}
 
-			sessionID := getSessionID(r, cfg.CookieName)
-			if sessionID == "" {
+			var session map[string]interface{}
+			var sessionID string
+
+			cookie, err := r.Cookie(cfg.CookieName)
+			if err == nil {
+				sessionID = cookie.Value
+				session, err = cfg.Store.Get(sessionID)
+				if err != nil {
+					// If session not found or any other error, create a new session
+					session = make(map[string]interface{})
+					sessionID = generateSessionID()
+				}
+			} else {
+				// No cookie found, create a new session
+				session = make(map[string]interface{})
 				sessionID = generateSessionID()
-				http.SetCookie(w, &http.Cookie{
-					Name:   cfg.CookieName,
-					Value:  sessionID,
-					MaxAge: cfg.MaxAge,
-				})
 			}
 
-			session, err := cfg.Store.Get(sessionID)
-			if xerror.Is(err, xerror.ErrNotFound) {
-				session = make(map[string]interface{})
-			} else if err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
+			// Always set the cookie, refreshing expiration
+			http.SetCookie(w, &http.Cookie{
+				Name:   cfg.CookieName,
+				Value:  sessionID,
+				MaxAge: cfg.MaxAge,
+			})
 
 			ctx := context.WithValue(r.Context(), cfg.SessionName, session)
 			ctx = context.WithValue(ctx, "sessionManager", sessionManager)
@@ -638,8 +657,8 @@ func Session(config ...SessionConfig) Middleware {
 
 			next.ServeHTTP(w, r)
 
+			// Save session after the handler has been called
 			if err := cfg.Store.Set(sessionID, session); err != nil {
-				// Log the error, but don't interrupt the response
 				fmt.Printf("Error saving session: %v\n", err)
 			}
 		})

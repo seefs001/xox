@@ -19,19 +19,41 @@ import (
 // ResponseWriter wraps http.ResponseWriter to provide additional functionality
 type ResponseWriter struct {
 	http.ResponseWriter
-	StatusCode int
+	statusCode int
+}
+
+// WriteHeader captures the status code
+func (w *ResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Status returns the HTTP status of the request
+func (w *ResponseWriter) Status() int {
+	if w.statusCode == 0 {
+		return http.StatusOK
+	}
+	return w.statusCode
 }
 
 // WriteJSON writes JSON response
 func (w *ResponseWriter) WriteJSON(v interface{}) error {
 	w.Header().Set("Content-Type", "application/json")
-	return xerror.Wrap(json.NewEncoder(w).Encode(v), "error encoding JSON response")
+	err := json.NewEncoder(w).Encode(v)
+	if err != nil {
+		return xerror.Wrap(err, "error encoding JSON response")
+	}
+	return nil
 }
 
 // WriteXML writes XML response
 func (w *ResponseWriter) WriteXML(v interface{}) error {
 	w.Header().Set("Content-Type", "application/xml")
-	return xerror.Wrap(xml.NewEncoder(w).Encode(v), "error encoding XML response")
+	err := xml.NewEncoder(w).Encode(v)
+	if err != nil {
+		return xerror.Wrap(err, "error encoding XML response")
+	}
+	return nil
 }
 
 // Context is a custom context type that includes request and response writer
@@ -50,13 +72,13 @@ func NewContext(w http.ResponseWriter, r *http.Request) *Context {
 
 // JSON sends a JSON response
 func (c *Context) JSON(code int, v interface{}) error {
-	c.Writer.StatusCode = code
+	c.Writer.WriteHeader(code)
 	return c.Writer.WriteJSON(v)
 }
 
 // XML sends an XML response
 func (c *Context) XML(code int, v interface{}) error {
-	c.Writer.StatusCode = code
+	c.Writer.WriteHeader(code)
 	return c.Writer.WriteXML(v)
 }
 
@@ -64,8 +86,8 @@ func (c *Context) XML(code int, v interface{}) error {
 func (c *Context) String(code int, format string, values ...interface{}) error {
 	c.Writer.Header().Set("Content-Type", "text/plain")
 	c.Writer.WriteHeader(code)
-	_, err := c.Writer.Write([]byte(fmt.Sprintf(format, values...)))
-	return xerror.Wrap(err, "error writing string response")
+	_, err := fmt.Fprintf(c.Writer, format, values...)
+	return err
 }
 
 // GetParam retrieves a URL parameter
@@ -115,7 +137,11 @@ func (c *Context) WithValue(key, val interface{}) {
 
 // GetBody decodes the request body into the provided interface
 func (c *Context) GetBody(v interface{}) error {
-	return xerror.Wrap(json.NewDecoder(c.Request.Body).Decode(v), "error decoding request body")
+	err := json.NewDecoder(c.Request.Body).Decode(v)
+	if err != nil {
+		return xerror.Wrap(err, "error decoding request body")
+	}
+	return nil
 }
 
 // GetBodyRaw returns the raw request body as a byte slice

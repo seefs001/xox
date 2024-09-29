@@ -116,17 +116,120 @@ func TestTimeIn(t *testing.T) {
 	// Check if the timezone has been correctly applied
 	assert.Equal(t, "America/New_York", nycTime.Location().String())
 
-	// FIXME: Calculate the expected offset
-	// Calculate the expected offset
-	// _, offset := nycTime.Zone()
-	// expectedOffset := time.Duration(-offset) * time.Second
+	// Check if the instant in time remains the same
+	assert.Equal(t, utcTime.Unix(), nycTime.Unix())
 
-	// // Check if the time difference is as expected
-	// assert.Equal(t, expectedOffset, nycTime.Sub(utcTime), "Time difference should be %v, but got %v", expectedOffset, nycTime.Sub(utcTime))
+	// Check if the hour is correct for New York time
+	expectedHour := 19 // 7 PM on the previous day in New York
+	assert.Equal(t, expectedHour, nycTime.Hour())
+
+	// Check if the date and time are correct for New York time
+	expectedDateTime := time.Date(2022, 12, 31, 19, 0, 0, 0, nycTime.Location())
+	assert.True(t, nycTime.Equal(expectedDateTime), "Expected %v, but got %v", expectedDateTime, nycTime)
 
 	// Additional check to print actual times for debugging
 	t.Logf("UTC time: %v, NYC time: %v", utcTime, nycTime)
 
+	// Test invalid timezone
 	_, err = xtime.TimeIn(utcTime, "Invalid/Timezone")
+	assert.Error(t, err)
+}
+
+func TestStartOfWeek(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Time
+		startDay time.Weekday
+		expected time.Time
+	}{
+		{
+			name:     "Sunday start",
+			input:    time.Date(2023, 5, 10, 12, 0, 0, 0, time.UTC), // Wednesday
+			startDay: time.Sunday,
+			expected: time.Date(2023, 5, 7, 0, 0, 0, 0, time.UTC), // Previous Sunday
+		},
+		{
+			name:     "Monday start",
+			input:    time.Date(2023, 5, 10, 12, 0, 0, 0, time.UTC), // Wednesday
+			startDay: time.Monday,
+			expected: time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC), // Previous Monday
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := xtime.StartOfWeek(tt.input, tt.startDay)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEndOfWeek(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Time
+		endDay   time.Weekday
+		expected time.Time
+	}{
+		{
+			name:     "Saturday end",
+			input:    time.Date(2023, 5, 10, 12, 0, 0, 0, time.UTC), // Wednesday
+			endDay:   time.Saturday,
+			expected: time.Date(2023, 5, 13, 23, 59, 59, 999999999, time.UTC), // Next Saturday
+		},
+		{
+			name:     "Sunday end",
+			input:    time.Date(2023, 5, 10, 12, 0, 0, 0, time.UTC), // Wednesday
+			endDay:   time.Sunday,
+			expected: time.Date(2023, 5, 14, 23, 59, 59, 999999999, time.UTC), // Next Sunday
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := xtime.EndOfWeek(tt.input, tt.endDay)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestStartOfMonth(t *testing.T) {
+	input := time.Date(2023, 5, 15, 12, 30, 0, 0, time.UTC)
+	expected := time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC)
+	result := xtime.StartOfMonth(input)
+	assert.Equal(t, expected, result)
+}
+
+func TestEndOfMonth(t *testing.T) {
+	input := time.Date(2023, 5, 15, 12, 30, 0, 0, time.UTC)
+	expected := time.Date(2023, 5, 31, 23, 59, 59, 999999999, time.UTC)
+	result := xtime.EndOfMonth(input)
+	assert.Equal(t, expected, result)
+}
+
+func TestStartOfYear(t *testing.T) {
+	input := time.Date(2023, 5, 15, 12, 30, 0, 0, time.UTC)
+	expected := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	result := xtime.StartOfYear(input)
+	assert.Equal(t, expected, result)
+}
+
+func TestEndOfYear(t *testing.T) {
+	input := time.Date(2023, 5, 15, 12, 30, 0, 0, time.UTC)
+	expected := time.Date(2023, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	result := xtime.EndOfYear(input)
+	assert.Equal(t, expected, result)
+}
+
+func TestAddDate(t *testing.T) {
+	input := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	expected := time.Date(2024, 3, 11, 0, 0, 0, 0, time.UTC)
+	result := xtime.AddDate(input, 1, 2, 10)
+	assert.Equal(t, expected, result)
+}
+
+func TestTimeIn_InvalidTimezone(t *testing.T) {
+	utcTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := xtime.TimeIn(utcTime, "Invalid/Timezone")
 	assert.Error(t, err)
 }

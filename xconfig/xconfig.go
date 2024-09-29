@@ -166,18 +166,35 @@ func (c *Config) LoadFromStruct(s any) error {
 		return xerror.New("input must be a struct")
 	}
 
-	t := v.Type()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i := 0; i < t.NumField(); i++ {
+	return c.loadStructFields(v, "")
+}
+
+func (c *Config) loadStructFields(v reflect.Value, prefix string) error {
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
 		field := t.Field(i)
+		if field.PkgPath != "" {
+			// Skip unexported fields
+			continue
+		}
 		tag := field.Tag.Get("config")
 		if tag == "" {
 			tag = field.Name
 		}
-		c.data[tag] = v.Field(i).Interface()
+		if prefix != "" {
+			tag = prefix + "." + tag
+		}
+		if field.Anonymous && field.Type.Kind() == reflect.Struct {
+			// Recursively handle embedded structs
+			if err := c.loadStructFields(v.Field(i), prefix); err != nil {
+				return err
+			}
+		} else {
+			c.data[tag] = v.Field(i).Interface()
+		}
 	}
-
 	return nil
 }
 
@@ -213,9 +230,24 @@ func (c *Config) FlattenMap(data map[string]any, prefix string) {
 		if prefix != "" {
 			fullKey = prefix + "." + key
 		}
-		if subMap, ok := value.(map[string]any); ok {
-			c.FlattenMap(subMap, fullKey)
-		} else {
+		switch v := value.(type) {
+		case map[string]any:
+			c.FlattenMap(v, fullKey)
+		case []any:
+			for i, item := range v {
+				indexStr, err := xcast.ToString(i)
+				if err != nil {
+					xlog.Error("Failed to convert index to string: %v", err)
+					continue
+				}
+				itemKey := fullKey + "." + indexStr
+				if subMap, ok := item.(map[string]any); ok {
+					c.FlattenMap(subMap, itemKey)
+				} else {
+					c.data[itemKey] = item
+				}
+			}
+		default:
 			c.data[fullKey] = value
 		}
 	}

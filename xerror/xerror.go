@@ -69,7 +69,7 @@ func Wrapf(err error, format string, args ...interface{}) *Error {
 		return nil
 	}
 	return &Error{
-		Err:       fmt.Errorf(format, args...),
+		Err:       fmt.Errorf(format+": %w", append(args, err)...),
 		Stack:     getStack(),
 		Timestamp: time.Now(),
 		Code:      0,
@@ -255,11 +255,16 @@ func MustNoError[T any](value T, err error) T {
 // Usage: rootErr := xerror.Cause(err)
 func Cause(err error) error {
 	for err != nil {
-		cause, ok := err.(interface{ Cause() error })
-		if !ok {
-			break
+		xerr, ok := err.(*Error)
+		if ok {
+			err = xerr.Err
+		} else {
+			cause, ok := err.(interface{ Unwrap() error })
+			if !ok {
+				break
+			}
+			err = cause.Unwrap()
 		}
-		err = cause.Cause()
 	}
 	return err
 }

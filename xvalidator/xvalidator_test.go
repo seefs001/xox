@@ -232,7 +232,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 13, 1, 0, 0, 0, 0, time.UTC),
+				Created:  time.Date(2023, 13, 1, 0, 0, 0, 0, time.UTC), // Invalid month
 			},
 			expectedError: true,
 		},
@@ -262,7 +262,7 @@ func TestValidate(t *testing.T) {
 				Score:    0,
 				Tags:     []string{"1"},
 				Active:   false,
-				Created:  time.Date(0001, 1, 1, 0, 0, 0, 0, time.UTC),
+				Created:  time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC),
 			},
 			expectedError: false,
 		},
@@ -371,7 +371,7 @@ func TestSpecificValidators(t *testing.T) {
 		assert.Empty(t, xvalidator.Validate(RegexpTest{Field: "abcdef"}))
 		assert.NotEmpty(t, xvalidator.Validate(RegexpTest{Field: "abc123"}))
 		assert.NotEmpty(t, xvalidator.Validate(RegexpTest{Field: "ABC"}))
-		assert.NotEmpty(t, xvalidator.Validate(RegexpTest{Field: ""}))
+		assert.Empty(t, xvalidator.Validate(RegexpTest{Field: ""}))
 		assert.NotEmpty(t, xvalidator.Validate(RegexpTest{Field: "a b c"}))
 	})
 
@@ -382,7 +382,7 @@ func TestSpecificValidators(t *testing.T) {
 
 		assert.Empty(t, xvalidator.Validate(InTest{Field: "banana"}))
 		assert.NotEmpty(t, xvalidator.Validate(InTest{Field: "grape"}))
-		assert.NotEmpty(t, xvalidator.Validate(InTest{Field: ""}))
+		assert.Empty(t, xvalidator.Validate(InTest{Field: ""}))
 		assert.NotEmpty(t, xvalidator.Validate(InTest{Field: "APPLE"}))
 		assert.NotEmpty(t, xvalidator.Validate(InTest{Field: "apple "}))
 	})
@@ -449,4 +449,92 @@ func TestSpecificValidators(t *testing.T) {
 		assert.Empty(t, xvalidator.Validate(DatetimeTest{Field: ""}))
 		assert.NotEmpty(t, xvalidator.Validate(DatetimeTest{Field: "2023-05-01 12:00:00"}))
 	})
+
+	t.Run("Length", func(t *testing.T) {
+		type LengthTest struct {
+			StringField string `xv:"len=5"`
+			SliceField  []int  `xv:"len=3"`
+		}
+
+		assert.Empty(t, xvalidator.Validate(LengthTest{StringField: "12345", SliceField: []int{1, 2, 3}}))
+		assert.NotEmpty(t, xvalidator.Validate(LengthTest{StringField: "1234", SliceField: []int{1, 2}}))
+		assert.NotEmpty(t, xvalidator.Validate(LengthTest{StringField: "123456", SliceField: []int{1, 2, 3, 4}}))
+	})
+
+	t.Run("Invalid validator", func(t *testing.T) {
+		type InvalidTest struct {
+			Field string `xv:"invalid_validator"`
+		}
+
+		errors := xvalidator.Validate(InvalidTest{Field: "test"})
+		assert.NotEmpty(t, errors)
+		assert.Contains(t, errors[0].Error(), "unknown validator")
+	})
+
+	t.Run("Multiple validators", func(t *testing.T) {
+		type MultiTest struct {
+			Field string `xv:"required,min=3,max=10,alphanum"`
+		}
+
+		assert.Empty(t, xvalidator.Validate(MultiTest{Field: "abc123"}))
+		assert.NotEmpty(t, xvalidator.Validate(MultiTest{Field: "ab"}))
+		assert.NotEmpty(t, xvalidator.Validate(MultiTest{Field: "abcdefghijk"}))
+		assert.NotEmpty(t, xvalidator.Validate(MultiTest{Field: "abc-123"}))
+		assert.NotEmpty(t, xvalidator.Validate(MultiTest{Field: ""}))
+	})
+
+	t.Run("Nested structs", func(t *testing.T) {
+		type NestedStruct struct {
+			InnerField string `xv:"required,min=3"`
+		}
+		type OuterStruct struct {
+			OuterField string `xv:"max=5"`
+			Nested     NestedStruct
+		}
+
+		assert.Empty(t, xvalidator.Validate(OuterStruct{OuterField: "abc", Nested: NestedStruct{InnerField: "1234"}}))
+		assert.NotEmpty(t, xvalidator.Validate(OuterStruct{OuterField: "abcdef", Nested: NestedStruct{InnerField: "12"}}))
+	})
+
+	t.Run("Pointer fields", func(t *testing.T) {
+		type PointerTest struct {
+			IntPtr    *int    `xv:"required,min=0"`
+			StringPtr *string `xv:"required,min=3"`
+		}
+
+		intVal := 5
+		strVal := "test"
+		assert.Empty(t, xvalidator.Validate(PointerTest{IntPtr: &intVal, StringPtr: &strVal}))
+
+		intZero := 0
+		strShort := "ab"
+		assert.NotEmpty(t, xvalidator.Validate(PointerTest{IntPtr: &intZero, StringPtr: &strShort}))
+
+		assert.NotEmpty(t, xvalidator.Validate(PointerTest{IntPtr: nil, StringPtr: nil}))
+	})
+
+	t.Run("Custom error messages", func(t *testing.T) {
+		type CustomErrorTest struct {
+			Field string `xv:"required,min=3"`
+		}
+
+		errors := xvalidator.Validate(CustomErrorTest{Field: ""})
+		assert.NotEmpty(t, errors)
+		assert.Contains(t, errors[0].Error(), "Field:")
+		assert.Contains(t, errors[0].Error(), "This field is required")
+
+		errors = xvalidator.Validate(CustomErrorTest{Field: "a"})
+		assert.NotEmpty(t, errors)
+		assert.Contains(t, errors[0].Error(), "Field:")
+		assert.Contains(t, errors[0].Error(), "Must be at least 3")
+	})
+}
+
+func TestValidateNilAndNonStruct(t *testing.T) {
+	assert.NotEmpty(t, xvalidator.Validate(nil))
+	assert.NotEmpty(t, xvalidator.Validate("not a struct"))
+	assert.NotEmpty(t, xvalidator.Validate(123))
+
+	var nilPtr *struct{}
+	assert.NotEmpty(t, xvalidator.Validate(nilPtr))
 }

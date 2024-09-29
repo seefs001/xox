@@ -332,6 +332,8 @@ func getString(data JSONObject, path JSONPath) (string, error) {
 		return strconv.FormatFloat(v, 'f', -1, 64), nil
 	case bool:
 		return strconv.FormatBool(v), nil
+	case int:
+		return strconv.Itoa(v), nil
 	default:
 		return "", fmt.Errorf("value at path %s is not a string", path)
 	}
@@ -347,6 +349,8 @@ func getInt(data JSONObject, path JSONPath) (int, error) {
 		return int(v), nil
 	case int:
 		return v, nil
+	case string:
+		return strconv.Atoi(v)
 	default:
 		return 0, fmt.Errorf("value at path %s is not an integer", path)
 	}
@@ -357,11 +361,16 @@ func getFloat(data JSONObject, path JSONPath) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	f, ok := value.(float64)
-	if !ok {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int:
+		return float64(v), nil
+	case string:
+		return strconv.ParseFloat(v, 64)
+	default:
 		return 0, fmt.Errorf("value at path %s is not a float", path)
 	}
-	return f, nil
 }
 
 func getBool(data JSONObject, path JSONPath) (bool, error) {
@@ -369,11 +378,14 @@ func getBool(data JSONObject, path JSONPath) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	b, ok := value.(bool)
-	if !ok {
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case string:
+		return strconv.ParseBool(v)
+	default:
 		return false, fmt.Errorf("value at path %s is not a boolean", path)
 	}
-	return b, nil
 }
 
 func getArray(data JSONObject, path JSONPath) (JSONArray, error) {

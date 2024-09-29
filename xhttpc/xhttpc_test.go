@@ -106,9 +106,10 @@ func TestClientMethods(t *testing.T) {
 
 func TestRetryWithBackoff(t *testing.T) {
 	attempts := 0
+	maxAttempts := 3
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		if attempts < 3 {
+		if attempts < maxAttempts {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -117,7 +118,8 @@ func TestRetryWithBackoff(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(WithRetryConfig(RetryConfig{
-		Count:      3,
+		Enabled:    true,
+		Count:      maxAttempts,
 		MaxBackoff: 100 * time.Millisecond,
 	}))
 	require.NoError(t, err, "NewClient should not return an error")
@@ -126,7 +128,7 @@ func TestRetryWithBackoff(t *testing.T) {
 	require.NoError(t, err, "Request should not fail")
 	defer resp.Body.Close()
 
-	assert.Equal(t, 3, attempts, "Expected 3 attempts")
+	assert.Equal(t, maxAttempts, attempts, "Expected %d attempts", maxAttempts)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "Expected status 200")
 }
 

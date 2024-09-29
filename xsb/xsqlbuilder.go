@@ -220,6 +220,10 @@ func (b *Builder[T]) BuildSelect() (string, []interface{}) {
 
 	if len(b.ctes) > 0 {
 		query.WriteString("WITH ")
+		if strings.HasPrefix(b.ctes[0], "RECURSIVE") {
+			query.WriteString("RECURSIVE ")
+			b.ctes[0] = strings.TrimPrefix(b.ctes[0], "RECURSIVE ")
+		}
 		query.WriteString(strings.Join(b.ctes, ", "))
 		query.WriteString(" ")
 	}
@@ -269,13 +273,6 @@ func (b *Builder[T]) BuildSelect() (string, []interface{}) {
 		query.WriteString(fmt.Sprintf(" OFFSET %d", b.offset))
 	}
 
-	for _, union := range b.unions {
-		unionQuery, unionArgs := union.BuildSelect()
-		query.WriteString(" UNION ALL ")
-		query.WriteString(unionQuery)
-		b.values = append(b.values, unionArgs...)
-	}
-
 	if b.forUpdate {
 		switch b.dialect {
 		case PostgreSQL, MySQL:
@@ -285,12 +282,24 @@ func (b *Builder[T]) BuildSelect() (string, []interface{}) {
 		}
 	}
 
+	for _, union := range b.unions {
+		unionQuery, unionArgs := union.BuildSelect()
+		query.WriteString(" UNION ALL ")
+		query.WriteString(unionQuery)
+		b.values = append(b.values, unionArgs...)
+	}
+
 	return query.String(), b.values
 }
 
 // BuildInsert builds an INSERT query
 func (b *Builder[T]) BuildInsert() (string, []interface{}) {
 	var query strings.Builder
+	if len(b.ctes) > 0 {
+		query.WriteString("WITH ")
+		query.WriteString(strings.Join(b.ctes, ", "))
+		query.WriteString(" ")
+	}
 	query.WriteString("INSERT INTO ")
 	query.WriteString(b.table)
 	query.WriteString(" (")
@@ -305,30 +314,28 @@ func (b *Builder[T]) BuildInsert() (string, []interface{}) {
 	query.WriteString(strings.Join(placeholders, ", "))
 	query.WriteString(")")
 
-	// Add Upsert for PostgreSQL
-	if b.dialect == PostgreSQL && len(b.upsertColumns) > 0 {
+	if len(b.onDuplicateKeyUpdate) > 0 && b.dialect == MySQL {
+		query.WriteString(" ON DUPLICATE KEY UPDATE ")
+		updates := make([]string, 0, len(b.onDuplicateKeyUpdate))
+		for col, val := range b.onDuplicateKeyUpdate {
+			updates = append(updates, fmt.Sprintf("%s = ?", col))
+			b.values = append(b.values, val)
+		}
+		query.WriteString(strings.Join(updates, ", "))
+	} else if len(b.upsertColumns) > 0 && b.dialect == PostgreSQL {
 		query.WriteString(" ON CONFLICT (")
 		query.WriteString(strings.Join(b.upsertColumns, ", "))
 		query.WriteString(") DO UPDATE SET ")
 		updates := make([]string, 0, len(b.upsertValues))
 		for col, val := range b.upsertValues {
-			b.paramCount++
-			updates = append(updates, fmt.Sprintf("%s = %s", col, b.placeholder(b.paramCount)))
+			updates = append(updates, fmt.Sprintf("%s = ?", col))
 			b.values = append(b.values, val)
 		}
 		query.WriteString(strings.Join(updates, ", "))
 	}
 
-	// Add ON DUPLICATE KEY UPDATE for MySQL
-	if b.dialect == MySQL && len(b.onDuplicateKeyUpdate) > 0 {
-		query.WriteString(" ON DUPLICATE KEY UPDATE ")
-		updates := make([]string, 0, len(b.onDuplicateKeyUpdate))
-		for col, val := range b.onDuplicateKeyUpdate {
-			b.paramCount++
-			updates = append(updates, fmt.Sprintf("%s = %s", col, b.placeholder(b.paramCount)))
-			b.values = append(b.values, val)
-		}
-		query.WriteString(strings.Join(updates, ", "))
+	if b.dialect == PostgreSQL && !b.debug {
+		query.WriteString(" RETURNING id")
 	}
 
 	return query.String(), b.values
@@ -344,9 +351,13 @@ func (b *Builder[T]) BuildUpdate() (string, []interface{}) {
 	setClauses := make([]string, 0, len(b.updateMap))
 	args := make([]interface{}, 0, len(b.updateMap))
 	for col, val := range b.updateMap {
-		b.paramCount++
-		setClauses = append(setClauses, fmt.Sprintf("%s = %s", col, b.placeholder(b.paramCount)))
-		args = append(args, val)
+		if str, ok := val.(string); ok && (strings.Contains(str, "+") || strings.Contains(str, "-")) {
+			setClauses = append(setClauses, fmt.Sprintf("%s = %s", col, str))
+		} else {
+			b.paramCount++
+			setClauses = append(setClauses, fmt.Sprintf("%s = %s", col, b.placeholder(b.paramCount)))
+			args = append(args, val)
+		}
 	}
 	query.WriteString(strings.Join(setClauses, ", "))
 
@@ -473,15 +484,16 @@ func (b *Builder[T]) SQL() string {
 
 // Build returns the final query string and arguments
 func (b *Builder[T]) Build() (string, []interface{}) {
+	if b.table == "" {
+		return "", nil
+	}
 	switch {
 	case len(b.columns) > 0:
 		return b.BuildSelect()
 	case len(b.updateMap) > 0:
 		return b.BuildUpdate()
-	case b.table != "":
-		return b.BuildDelete()
 	default:
-		return "", nil
+		return b.BuildDelete()
 	}
 }
 
@@ -741,36 +753,32 @@ func (b *Builder[T]) InsertIgnore() (string, []interface{}, error) {
 	return strings.Replace(query, "INSERT", "INSERT IGNORE", 1), args, nil
 }
 
-// OnDuplicateKeyUpdate builds an ON DUPLICATE KEY UPDATE clause (for MySQL)
+// OnDuplicateKeyUpdate adds an ON DUPLICATE KEY UPDATE clause for MySQL
 func (b *Builder[T]) OnDuplicateKeyUpdate(updates map[string]interface{}) *Builder[T] {
 	if b.dialect != MySQL {
 		log.Printf("ON DUPLICATE KEY UPDATE is only supported for MySQL")
 		return b
 	}
-	for col, val := range updates {
-		b.onDuplicateKeyUpdate[col] = val
-	}
+	b.onDuplicateKeyUpdate = updates
 	return b
 }
 
-// Upsert builds an UPSERT query (for PostgreSQL)
+// Upsert adds an UPSERT clause for PostgreSQL
 func (b *Builder[T]) Upsert(conflictColumns []string, updates map[string]interface{}) *Builder[T] {
 	if b.dialect != PostgreSQL {
 		log.Printf("UPSERT is only supported for PostgreSQL")
 		return b
 	}
 	b.upsertColumns = conflictColumns
-	for col, val := range updates {
-		b.upsertValues[col] = val
-	}
+	b.upsertValues = updates
 	return b
 }
 
 // WithRecursive adds a WITH RECURSIVE clause for recursive CTEs
 func (b *Builder[T]) WithRecursive(name string, subquery *Builder[T]) *Builder[T] {
 	subQuerySQL, _ := subquery.BuildSelect()
-	cte := fmt.Sprintf("%s AS (%s)", name, subQuerySQL)
-	b.ctes = append([]string{"RECURSIVE " + cte}, b.ctes...)
+	cte := fmt.Sprintf("RECURSIVE %s AS (%s)", name, subQuerySQL)
+	b.ctes = append([]string{cte}, b.ctes...)
 	return b
 }
 
@@ -807,13 +815,13 @@ func (b *Builder[T]) MustBuild() string {
 // WhereExists adds a WHERE EXISTS subquery
 func (b *Builder[T]) WhereExists(subquery *Builder[T]) *Builder[T] {
 	subQuerySQL, subQueryArgs := subquery.Build()
-	return b.Where(fmt.Sprintf("EXISTS (%s)", subQuerySQL), subQueryArgs...)
+	return b.Where("EXISTS ("+subQuerySQL+")", subQueryArgs...)
 }
 
 // WhereNotExists adds a WHERE NOT EXISTS subquery
 func (b *Builder[T]) WhereNotExists(subquery *Builder[T]) *Builder[T] {
 	subQuerySQL, subQueryArgs := subquery.Build()
-	return b.Where(fmt.Sprintf("NOT EXISTS (%s)", subQuerySQL), subQueryArgs...)
+	return b.Where("NOT EXISTS ("+subQuerySQL+")", subQueryArgs...)
 }
 
 // WithLock adds a locking clause based on the dialect
@@ -892,7 +900,11 @@ func Sanitize(input string) string {
 	input = strings.ReplaceAll(input, ";", "")
 
 	// Remove any UNION keywords
-	re = regexp.MustCompile(`(?i)\bUNION\b`)
+	re = regexp.MustCompile(`(?i)\s*UNION\s*`)
+	input = re.ReplaceAllString(input, " ")
+
+	// Remove any DROP statements
+	re = regexp.MustCompile(`(?i)\s*DROP\s+TABLE\s+\w+`)
 	input = re.ReplaceAllString(input, "")
 
 	return strings.TrimSpace(input)

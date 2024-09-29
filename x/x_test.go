@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -1024,5 +1025,503 @@ func TestIsZero(t *testing.T) {
 		assert.False(t, x.IsZero(map[string]int{"a": 1}))
 		nonZeroStruct := struct{ Value int }{Value: 1}
 		assert.False(t, x.IsZero(nonZeroStruct))
+	})
+}
+
+func TestOnlyErr(t *testing.T) {
+	t.Run("No error", func(t *testing.T) {
+		err := x.OnlyErr("some value", nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("With error", func(t *testing.T) {
+		expectedErr := errors.New("test error")
+		err := x.OnlyErr("some value", expectedErr)
+		assert.Equal(t, expectedErr, err)
+	})
+
+	t.Run("No values", func(t *testing.T) {
+		err := x.OnlyErr()
+		assert.NoError(t, err)
+	})
+
+	t.Run("Multiple return values", func(t *testing.T) {
+		err := x.OnlyErr(1, "string", true, nil)
+		assert.NoError(t, err)
+
+		expectedErr := errors.New("multiple values error")
+		err = x.OnlyErr(1, "string", true, expectedErr)
+		assert.Equal(t, expectedErr, err)
+	})
+
+	t.Run("Function with no error", func(t *testing.T) {
+		f := func() (int, string, error) {
+			return 42, "hello", nil
+		}
+		err := x.OnlyErr(f())
+		assert.NoError(t, err)
+	})
+
+	t.Run("Function with error", func(t *testing.T) {
+		f := func() (int, string, error) {
+			return 0, "", errors.New("function error")
+		}
+		err := x.OnlyErr(f())
+		assert.EqualError(t, err, "function error")
+	})
+
+	t.Run("Function with multiple return values and error", func(t *testing.T) {
+		f := func() (int, string, bool, error) {
+			return 42, "hello", true, errors.New("complex function error")
+		}
+		err := x.OnlyErr(f())
+		assert.EqualError(t, err, "complex function error")
+	})
+}
+
+func TestIsImageURL(t *testing.T) {
+	tests := []struct {
+		url      string
+		expected bool
+	}{
+		{"https://example.com/image.jpg", true},
+		{"http://example.com/image.png", true},
+		{"https://example.com/image.gif", true},
+		{"https://example.com/file.txt", false},
+		{"not-a-url", false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.url, func(t *testing.T) {
+			result := x.IsImageURL(test.url)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestIsBase64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"SGVsbG8gV29ybGQ=", true},
+		{"Invalid base64", false},
+		{"", true}, // Empty string is valid base64
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := x.IsBase64(test.input)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestTrimSuffixes(t *testing.T) {
+	tests := []struct {
+		input    string
+		suffixes []string
+		expected string
+	}{
+		{"example.tar.gz", []string{".gz", ".tar"}, "example"},
+		{"file.txt", []string{".pdf", ".doc"}, "file.txt"},
+		{"multiple.suffixes.here", []string{".here", ".there"}, "multiple.suffixes"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := x.TrimSuffixes(test.input, test.suffixes...)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestSetNonZeroValues(t *testing.T) {
+	t.Run("Basic usage", func(t *testing.T) {
+		dst := map[string]interface{}{"a": 1, "b": ""}
+		src := map[string]interface{}{"a": 2, "b": "hello", "c": 3}
+		x.SetNonZeroValues(dst, src)
+		expected := map[string]interface{}{"a": 2, "b": "hello", "c": 3}
+		assert.Equal(t, expected, dst)
+	})
+
+	t.Run("With zero values", func(t *testing.T) {
+		dst := map[string]interface{}{"a": 1, "b": "value"}
+		src := map[string]interface{}{"a": 0, "b": "", "c": false}
+		x.SetNonZeroValues(dst, src)
+		expected := map[string]interface{}{"a": 1, "b": "value"}
+		assert.Equal(t, expected, dst)
+	})
+}
+
+func TestSetNonZeroValuesWithKeys(t *testing.T) {
+	t.Run("Basic usage", func(t *testing.T) {
+		dst := map[string]interface{}{"a": 1, "b": ""}
+		src := map[string]interface{}{"a": 2, "b": "hello", "c": 3}
+		x.SetNonZeroValuesWithKeys(dst, src, "a", "c")
+		expected := map[string]interface{}{"a": 2, "b": "", "c": 3}
+		assert.Equal(t, expected, dst)
+	})
+
+	t.Run("With non-existent keys", func(t *testing.T) {
+		dst := map[string]interface{}{"a": 1, "b": "value"}
+		src := map[string]interface{}{"a": 2, "c": 3}
+		x.SetNonZeroValuesWithKeys(dst, src, "b", "c", "d")
+		expected := map[string]interface{}{"a": 1, "b": "value", "c": 3}
+		assert.Equal(t, expected, dst)
+	})
+}
+
+func TestMapKeys(t *testing.T) {
+	m := map[string]int{"a": 1, "b": 2, "c": 3}
+	keys := x.MapKeys(m)
+	assert.ElementsMatch(t, []string{"a", "b", "c"}, keys)
+}
+
+func TestMapValues(t *testing.T) {
+	m := map[string]int{"a": 1, "b": 2, "c": 3}
+	values := x.MapValues(m)
+	assert.ElementsMatch(t, []int{1, 2, 3}, values)
+}
+
+func TestShuffle(t *testing.T) {
+	original := []int{1, 2, 3, 4, 5}
+	shuffled := make([]int, len(original))
+	copy(shuffled, original)
+	x.Shuffle(shuffled)
+
+	assert.NotEqual(t, original, shuffled)
+	assert.ElementsMatch(t, original, shuffled)
+}
+
+func TestFlattenMap(t *testing.T) {
+	input := map[string]any{
+		"a": 1,
+		"b": map[string]any{
+			"c": 2,
+			"d": map[string]any{
+				"e": 3,
+			},
+		},
+	}
+	expected := map[string]any{
+		"a":     1,
+		"b.c":   2,
+		"b.d.e": 3,
+	}
+	result := x.FlattenMap(input, "")
+	assert.Equal(t, expected, result)
+}
+
+func TestCopyMap(t *testing.T) {
+	original := map[string]int{"a": 1, "b": 2}
+	copied := x.CopyMap(original)
+
+	assert.Equal(t, original, copied)
+	assert.NotSame(t, original, copied)
+
+	copied["c"] = 3
+	assert.NotEqual(t, original, copied)
+}
+
+func TestFileExists(t *testing.T) {
+	t.Run("Existing file", func(t *testing.T) {
+		tempFile, err := os.CreateTemp("", "test")
+		require.NoError(t, err)
+		defer os.Remove(tempFile.Name())
+
+		assert.True(t, x.FileExists(tempFile.Name()))
+	})
+
+	t.Run("Non-existing file", func(t *testing.T) {
+		assert.False(t, x.FileExists("non_existing_file.txt"))
+	})
+}
+
+func TestGenerateUUID(t *testing.T) {
+	uuid1, err := x.GenerateUUID()
+	assert.NoError(t, err)
+	assert.Regexp(t, "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", uuid1)
+
+	uuid2, err := x.GenerateUUID()
+	assert.NoError(t, err)
+	assert.NotEqual(t, uuid1, uuid2)
+}
+
+func TestDecodeUnicodeURL(t *testing.T) {
+	tests := []struct {
+		encoded  string
+		expected string
+	}{
+		{"https://example.com/path?q=%E4%BD%A0%E5%A5%BD", "https://example.com/path?q=你好"},
+		{"https://example.com/no-encoding", "https://example.com/no-encoding"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.encoded, func(t *testing.T) {
+			decoded, err := x.DecodeUnicodeURL(test.encoded)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected, decoded)
+		})
+	}
+}
+
+func TestEncodeUnicodeURL(t *testing.T) {
+	tests := []struct {
+		original string
+		expected string
+	}{
+		{"https://example.com/path?q=你好", "https%3A%2F%2Fexample.com%2Fpath%3Fq%3D%E4%BD%A0%E5%A5%BD"},
+		{"https://example.com/no-encoding", "https%3A%2F%2Fexample.com%2Fno-encoding"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.original, func(t *testing.T) {
+			encoded, err := x.EncodeUnicodeURL(test.original)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected, encoded)
+		})
+	}
+}
+
+func TestStringToBool(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"1", true},
+		{"t", true},
+		{"true", true},
+		{"yes", true},
+		{"y", true},
+		{"on", true},
+		{"0", false},
+		{"f", false},
+		{"false", false},
+		{"no", false},
+		{"n", false},
+		{"off", false},
+		{"", false},
+		{"random", false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := x.StringToBool(test.input)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringToInt(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+		hasError bool
+	}{
+		{"42", 42, false},
+		{"-42", -42, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToInt(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToInt64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		hasError bool
+	}{
+		{"9223372036854775807", 9223372036854775807, false},
+		{"-9223372036854775808", -9223372036854775808, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToInt64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToUint(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint
+		hasError bool
+	}{
+		{"42", 42, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"-1", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToUint(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToUint64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint64
+		hasError bool
+	}{
+		{"18446744073709551615", 18446744073709551615, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"-1", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToUint64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToFloat64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected float64
+		hasError bool
+	}{
+		{"3.14", 3.14, false},
+		{"-2.5", -2.5, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToFloat64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToDuration(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected time.Duration
+		hasError bool
+	}{
+		{"5s", 5 * time.Second, false},
+		{"10m", 10 * time.Minute, false},
+		{"2h30m", 2*time.Hour + 30*time.Minute, false},
+		{"", 0, true},
+		{"invalid", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := x.StringToDuration(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToMap(t *testing.T) {
+	tests := []struct {
+		input    string
+		pairSep  string
+		kvSep    string
+		expected map[string]string
+	}{
+		{"key1=value1,key2=value2", ",", "=", map[string]string{"key1": "value1", "key2": "value2"}},
+		{"k1:v1;k2:v2", ";", ":", map[string]string{"k1": "v1", "k2": "v2"}},
+		{"", ",", "=", map[string]string{}},
+		{"invalid", ",", "=", map[string]string{}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := x.StringToMap(test.input, test.pairSep, test.kvSep)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestBindData(t *testing.T) {
+	type TestStruct struct {
+		Name  string `form:"name"`
+		Age   int    `form:"age"`
+		Email string
+	}
+
+	t.Run("Valid binding", func(t *testing.T) {
+		data := map[string][]string{
+			"name": {"John"},
+			"age":  {"30"},
+		}
+		var result TestStruct
+		err := x.BindData(&result, data)
+		assert.NoError(t, err)
+		assert.Equal(t, "John", result.Name)
+		assert.Equal(t, 30, result.Age)
+	})
+
+	t.Run("Invalid type", func(t *testing.T) {
+		data := map[string][]string{
+			"age": {"invalid"},
+		}
+		var result TestStruct
+		err := x.BindData(&result, data)
+		assert.Error(t, err)
+	})
+
+	t.Run("Non-pointer argument", func(t *testing.T) {
+		data := map[string][]string{}
+		var result TestStruct
+		err := x.BindData(result, data)
+		assert.Error(t, err)
 	})
 }

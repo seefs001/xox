@@ -245,3 +245,202 @@ func TestConvertStruct(t *testing.T) {
 	assert.Equal(t, src.Name, dst.Name)
 	assert.Equal(t, src.Value, dst.Value)
 }
+
+func TestStringToStruct(t *testing.T) {
+	type Person struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected Person
+		hasError bool
+	}{
+		{
+			name:     "Valid JSON",
+			input:    `{"name":"Alice","age":30}`,
+			expected: Person{Name: "Alice", Age: 30},
+			hasError: false,
+		},
+		{
+			name:     "Empty JSON",
+			input:    `{}`,
+			expected: Person{},
+			hasError: false,
+		},
+		{
+			name:     "Invalid JSON",
+			input:    `{"name":"Bob","age":}`,
+			expected: Person{},
+			hasError: true,
+		},
+		{
+			name:     "Extra fields in JSON",
+			input:    `{"name":"Charlie","age":35,"city":"New York"}`,
+			expected: Person{Name: "Charlie", Age: 35},
+			hasError: false,
+		},
+		{
+			name:     "Missing fields in JSON",
+			input:    `{"name":"David"}`,
+			expected: Person{Name: "David", Age: 0},
+			hasError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := xcast.StringToStruct[Person](tt.input)
+			if tt.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestStructToString(t *testing.T) {
+	type Person struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	tests := []struct {
+		name     string
+		input    Person
+		expected string
+		hasError bool
+	}{
+		{
+			name:     "Valid struct",
+			input:    Person{Name: "Alice", Age: 30},
+			expected: `{"name":"Alice","age":30}`,
+			hasError: false,
+		},
+		{
+			name:     "Empty struct",
+			input:    Person{},
+			expected: `{"name":"","age":0}`,
+			hasError: false,
+		},
+		{
+			name:     "Struct with zero values",
+			input:    Person{Name: "", Age: 0},
+			expected: `{"name":"","age":0}`,
+			hasError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := xcast.StructToString(tt.input)
+			if tt.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.JSONEq(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// Test for edge cases and error handling
+func TestStringToStructEdgeCases(t *testing.T) {
+	type ComplexStruct struct {
+		IntValue    int               `json:"int_value"`
+		FloatValue  float64           `json:"float_value"`
+		BoolValue   bool              `json:"bool_value"`
+		StringValue string            `json:"string_value"`
+		ArrayValue  []int             `json:"array_value"`
+		MapValue    map[string]string `json:"map_value"`
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected ComplexStruct
+		hasError bool
+	}{
+		{
+			name:     "Complex valid JSON",
+			input:    `{"int_value":42,"float_value":3.14,"bool_value":true,"string_value":"test","array_value":[1,2,3],"map_value":{"key":"value"}}`,
+			expected: ComplexStruct{IntValue: 42, FloatValue: 3.14, BoolValue: true, StringValue: "test", ArrayValue: []int{1, 2, 3}, MapValue: map[string]string{"key": "value"}},
+			hasError: false,
+		},
+		{
+			name:     "Invalid JSON syntax",
+			input:    `{"int_value":42,}`,
+			expected: ComplexStruct{},
+			hasError: true,
+		},
+		{
+			name:     "Invalid type for field",
+			input:    `{"int_value":"not an int"}`,
+			expected: ComplexStruct{},
+			hasError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := xcast.StringToStruct[ComplexStruct](tt.input)
+			if tt.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// Test for custom types and nested structs
+func TestStructToStringComplexCases(t *testing.T) {
+	type Address struct {
+		Street string `json:"street"`
+		City   string `json:"city"`
+	}
+
+	type Person struct {
+		Name    string  `json:"name"`
+		Age     int     `json:"age"`
+		Address Address `json:"address"`
+	}
+
+	tests := []struct {
+		name     string
+		input    Person
+		expected string
+		hasError bool
+	}{
+		{
+			name: "Nested struct",
+			input: Person{
+				Name: "Alice",
+				Age:  30,
+				Address: Address{
+					Street: "123 Main St",
+					City:   "Anytown",
+				},
+			},
+			expected: `{"name":"Alice","age":30,"address":{"street":"123 Main St","city":"Anytown"}}`,
+			hasError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := xcast.StructToString(tt.input)
+			if tt.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.JSONEq(t, tt.expected, result)
+			}
+		})
+	}
+}

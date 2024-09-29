@@ -108,8 +108,28 @@ func applyValidator(name, arg, fieldName string, value interface{}) error {
 
 func required(field string, value interface{}) error {
 	v := reflect.ValueOf(value)
-	if v.IsZero() {
-		return ValidationError{Field: field, Message: "This field is required"}
+	if v.Kind() == reflect.Ptr && !v.IsNil() {
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+		if v.Len() == 0 {
+			return ValidationError{Field: field, Message: "This field is required"}
+		}
+	case reflect.Bool:
+		return nil
+	case reflect.Struct:
+		if v.Type() == reflect.TypeOf(time.Time{}) {
+			t := v.Interface().(time.Time)
+			if t.IsZero() || t.Year() < 1 {
+				return ValidationError{Field: field, Message: "This field is required"}
+			}
+		}
+	default:
+		if v.IsZero() {
+			return ValidationError{Field: field, Message: "This field is required"}
+		}
 	}
 	return nil
 }
@@ -125,7 +145,25 @@ func min(field string, value interface{}, arg string) error {
 	}
 
 	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at least %v", num)}
+		}
+		v = v.Elem()
+	}
+
 	switch v.Kind() {
+	case reflect.String:
+		if v.String() == "" {
+			return nil // Allow empty string unless required is also specified
+		}
+		if v.Len() < int(num) {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at least %v characters long", num)}
+		}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		if v.Len() < int(num) {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must have at least %v elements", num)}
+		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if v.Int() < int64(num) {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at least %v", num)}
@@ -137,10 +175,6 @@ func min(field string, value interface{}, arg string) error {
 	case reflect.Float32, reflect.Float64:
 		if v.Float() < num {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at least %v", num)}
-		}
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
-		if v.Len() < int(num) {
-			return ValidationError{Field: field, Message: fmt.Sprintf("Must have at least %v elements", num)}
 		}
 	default:
 		return fmt.Errorf("min validator not supported for type %v in field %s", v.Kind(), field)
@@ -206,6 +240,9 @@ func regexpValidator(field string, value interface{}, pattern string) error {
 	if !ok {
 		return fmt.Errorf("regexp validator requires a string for field %s", field)
 	}
+	if str == "" {
+		return nil // Allow empty string unless required is also specified
+	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fmt.Errorf("invalid regexp pattern: %s for field %s", pattern, field)
@@ -246,6 +283,11 @@ func in(field string, value interface{}, arg string) error {
 	options := strings.Split(arg, "|")
 	v := reflect.ValueOf(value)
 	strValue := fmt.Sprintf("%v", v.Interface())
+
+	if strValue == "" {
+		return nil // Allow empty string unless required is also specified
+	}
+
 	for _, option := range options {
 		if strValue == option {
 			return nil
@@ -325,15 +367,21 @@ func datetime(field string, value interface{}, layout string) error {
 		return fmt.Errorf("datetime validator requires a layout argument for field %s", field)
 	}
 
-	str, ok := value.(string)
-	if !ok {
-		return fmt.Errorf("datetime validator requires a string for field %s", field)
-	}
-	if str == "" {
-		return nil // Allow empty datetime unless required is also specified
-	}
-	if _, err := time.Parse(layout, str); err != nil {
-		return ValidationError{Field: field, Message: fmt.Sprintf("Must be a valid datetime in the format %s", layout)}
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return nil // Allow empty string unless required is also specified
+		}
+		if _, err := time.Parse(layout, v); err != nil {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must be a valid datetime in the format %s", layout)}
+		}
+	case time.Time:
+		// For time.Time, we need to check if it's a valid date
+		if v.Year() < 1 || v.Year() > 9999 || v.Month() < 1 || v.Month() > 12 || v.Day() < 1 || v.Day() > 31 {
+			return ValidationError{Field: field, Message: "Invalid date"}
+		}
+	default:
+		return fmt.Errorf("datetime validator requires a string or time.Time for field %s", field)
 	}
 	return nil
 }

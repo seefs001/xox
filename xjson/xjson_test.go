@@ -1,6 +1,7 @@
 package xjson_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/seefs001/xox/xjson"
@@ -190,5 +191,79 @@ func TestXJSON(t *testing.T) {
 		}, 0.0)
 		assert.NoError(t, err)
 		xlog.Info("Reduced grades", "original", data["grades"], "sum", result)
+	})
+
+	t.Run("NestedArrayAccess", func(t *testing.T) {
+		value, err := xjson.GetStringFromString(jsonStr, "contacts[1].value")
+		assert.NoError(t, err)
+		assert.Equal(t, "555-1234", value)
+		xlog.Info("Retrieved nested array value", "path", "contacts[1].value", "value", value)
+	})
+
+	t.Run("InvalidArrayAccess", func(t *testing.T) {
+		_, err := xjson.GetFromString(jsonStr, "grades[5]")
+		assert.Error(t, err)
+		xlog.Error("Error handling for invalid array access", "error", err)
+	})
+
+	t.Run("InvalidNestedAccess", func(t *testing.T) {
+		_, err := xjson.GetFromString(jsonStr, "address.street.name")
+		assert.Error(t, err)
+		xlog.Error("Error handling for invalid nested access", "error", err)
+	})
+
+	t.Run("GetIntFromFloat", func(t *testing.T) {
+		value, err := xjson.GetIntFromString(jsonStr, "age")
+		assert.NoError(t, err)
+		assert.Equal(t, 30, value)
+		xlog.Info("Retrieved int value from float", "key", "age", "value", value)
+	})
+
+	t.Run("GetStringFromNumber", func(t *testing.T) {
+		value, err := xjson.GetStringFromString(jsonStr, "age")
+		assert.NoError(t, err)
+		assert.Equal(t, "30", value)
+		xlog.Info("Retrieved string value from number", "key", "age", "value", value)
+	})
+
+	t.Run("GetStringFromBoolean", func(t *testing.T) {
+		value, err := xjson.GetStringFromString(jsonStr, "isStudent")
+		assert.NoError(t, err)
+		assert.Equal(t, "false", value)
+		xlog.Info("Retrieved string value from boolean", "key", "isStudent", "value", value)
+	})
+
+	t.Run("MapWithError", func(t *testing.T) {
+		data, _ := xjson.ParseJSON(jsonStr)
+		_, err := xjson.Map(data["grades"], func(key interface{}, value interface{}) (interface{}, error) {
+			return nil, fmt.Errorf("intentional error")
+		})
+		assert.Error(t, err)
+		xlog.Error("Error handling in Map function", "error", err)
+	})
+
+	t.Run("FilterWithError", func(t *testing.T) {
+		data, _ := xjson.ParseJSON(jsonStr)
+		_, err := xjson.Filter(data["grades"], func(key interface{}, value interface{}) (bool, error) {
+			return false, fmt.Errorf("intentional error")
+		})
+		assert.Error(t, err)
+		xlog.Error("Error handling in Filter function", "error", err)
+	})
+
+	t.Run("ReduceWithError", func(t *testing.T) {
+		data, _ := xjson.ParseJSON(jsonStr)
+		_, err := xjson.Reduce(data["grades"], func(accumulator, key, value interface{}) (interface{}, error) {
+			return nil, fmt.Errorf("intentional error")
+		}, 0.0)
+		assert.Error(t, err)
+		xlog.Error("Error handling in Reduce function", "error", err)
+	})
+
+	t.Run("InvalidJSONParse", func(t *testing.T) {
+		invalidJSON := `{"name": "John", "age": 30,}`
+		_, err := xjson.ParseJSON(invalidJSON)
+		assert.Error(t, err)
+		xlog.Error("Error handling for invalid JSON parsing", "error", err)
 	})
 }

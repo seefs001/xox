@@ -2,6 +2,7 @@ package xenv
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,12 +99,12 @@ func GetDefault(key, defaultValue string) string {
 
 // Set sets the value of an environment variable
 func Set(key, value string) error {
-	return xerror.Wrap(os.Setenv(key, value), "error setting environment variable")
+	return os.Setenv(key, value)
 }
 
 // Unset removes an environment variable
 func Unset(key string) error {
-	return xerror.Wrap(os.Unsetenv(key), "error unsetting environment variable")
+	return os.Unsetenv(key)
 }
 
 // GetBool retrieves the boolean value of an environment variable
@@ -162,5 +163,5 @@ func GetMap(key, pairSep, kvSep string) map[string]string {
 
 // GetJSON retrieves and unmarshals a JSON-encoded environment variable
 func GetJSON(key string, v interface{}) error {
-	return x.UnmarshalJSON([]byte(os.Getenv(key)), v)
+	return json.Unmarshal([]byte(os.Getenv(key)), v)
 }

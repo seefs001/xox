@@ -133,7 +133,7 @@ func NewClient(options ...ClientOption) (*Client, error) {
 			},
 		},
 		retryConfig: RetryConfig{
-			Enabled:    false,
+			Enabled:    true, // Set this to true by default
 			Count:      defaultRetryCount,
 			MaxBackoff: defaultMaxBackoff,
 		},
@@ -791,27 +791,25 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	var err error
 
-	if c.retryConfig.Enabled {
-		operation := func() error {
-			resp, err = c.client.Do(req)
-			if err != nil {
-				return xerror.Wrap(err, "failed to send request")
-			}
-			if resp.StatusCode >= 500 {
-				return xerror.Newf("server error: %d", resp.StatusCode)
-			}
-			return nil
-		}
-
-		err = c.retryWithBackoff(req.Context(), operation)
-		if err != nil {
-			return nil, xerror.Wrap(err, "request failed after retries")
-		}
-	} else {
+	operation := func() error {
 		resp, err = c.client.Do(req)
 		if err != nil {
-			return nil, xerror.Wrap(err, "failed to send request")
+			return xerror.Wrap(err, "failed to send request")
 		}
+		if resp.StatusCode >= 500 {
+			return xerror.Newf("server error: %d", resp.StatusCode)
+		}
+		return nil
+	}
+
+	if c.retryConfig.Enabled {
+		err = c.retryWithBackoff(req.Context(), operation)
+	} else {
+		err = operation()
+	}
+
+	if err != nil {
+		return nil, xerror.Wrap(err, "request failed after retries")
 	}
 
 	if c.debug && c.logOptions.LogResponse {

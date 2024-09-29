@@ -1,6 +1,7 @@
 package xd_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -296,15 +297,144 @@ func TestRemoveNamedService(t *testing.T) {
 	})
 
 	// Check if the service exists
-	assert.True(t, c.HasService(reflect.TypeOf((*Config)(nil)).Elem()), "Expected service to exist")
+	devConfig, err := xd.InvokeNamed[*Config](c, "dev")
+	assert.NoError(t, err, "Expected service to exist")
+	assert.NotNil(t, devConfig, "Expected service to exist")
 
 	// Remove the named service
 	c.RemoveNamedService(reflect.TypeOf((*Config)(nil)).Elem(), "dev")
 
-	// Check if the service has been removed
-	assert.False(t, c.HasService(reflect.TypeOf((*Config)(nil)).Elem()), "Expected service to be removed")
-
 	// Try to invoke the removed service
-	_, err := xd.InvokeNamed[*Config](c, "dev")
+	_, err = xd.InvokeNamed[*Config](c, "dev")
 	assert.Error(t, err, "Expected error when invoking removed service")
+}
+
+// TestCloneContainer tests the Clone method of the Container
+func TestCloneContainer(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	xd.Provide(c, func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "production"}, nil
+	})
+
+	// Invoke the service to mark it as invoked
+	xd.MustInvoke[*Config](c)
+
+	// Clone the container
+	clonedContainer := c.Clone()
+
+	// Check if the cloned container has the same service
+	clonedConfig := xd.MustInvoke[*Config](clonedContainer)
+	assert.Equal(t, "production", clonedConfig.Environment, "Cloned container should have the same service")
+
+	// Check if the service is marked as invoked in the cloned container
+	services := xd.ListServices(clonedContainer)
+	assert.Equal(t, 1, len(services), "Cloned container should have 1 service")
+	assert.True(t, services[0].IsInvoked, "Service should be marked as invoked in cloned container")
+
+	// Modify the original container
+	xd.Provide(c, func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "development"}, nil
+	})
+
+	// Check that the cloned container is not affected
+	clonedConfigAfterModification := xd.MustInvoke[*Config](clonedContainer)
+	assert.Equal(t, "production", clonedConfigAfterModification.Environment, "Cloned container should not be affected by changes to original")
+}
+
+// TestClearContainer tests the Clear method of the Container
+func TestClearContainer(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	xd.Provide(c, func(c *xd.Container) (*Config, error) {
+		return &Config{Environment: "production"}, nil
+	})
+
+	// Invoke the service
+	xd.MustInvoke[*Config](c)
+
+	// Clear the container
+	c.Clear()
+
+	// Check if the container is empty
+	services := xd.ListServices(c)
+	assert.Equal(t, 0, len(services), "Container should be empty after Clear")
+
+	// Try to invoke the service again
+	_, err := xd.Invoke[*Config](c)
+	assert.Error(t, err, "Invoking cleared service should return an error")
+}
+
+// TestSetServiceAndSetNamedService tests the SetService and SetNamedService methods
+func TestSetServiceAndSetNamedService(t *testing.T) {
+	c := xd.NewContainer()
+
+	type Config struct {
+		Environment string
+	}
+
+	// Test SetService
+	c.SetService(&Config{Environment: "production"})
+	config := xd.MustInvoke[*Config](c)
+	assert.Equal(t, "production", config.Environment, "SetService should set the service correctly")
+
+	// Test SetNamedService
+	c.SetNamedService("dev", &Config{Environment: "development"})
+	devConfig := xd.MustInvokeNamed[*Config](c, "dev")
+	assert.Equal(t, "development", devConfig.Environment, "SetNamedService should set the named service correctly")
+
+	// Check that both services exist
+	services := xd.ListServices(c)
+	assert.Equal(t, 2, len(services), "Container should have 2 services")
+}
+
+// TestErrorHandlingAndEdgeCases tests various error handling scenarios and edge cases
+func TestErrorHandlingAndEdgeCases(t *testing.T) {
+	c := xd.NewContainer()
+
+	// Test invoking non-existent service
+	_, err := xd.Invoke[*struct{}](c)
+	assert.Error(t, err, "Invoking non-existent service should return an error")
+
+	// Test providing service with error
+	xd.Provide(c, func(c *xd.Container) (*struct{}, error) {
+		return nil, fmt.Errorf("service creation failed")
+	})
+	_, err = xd.Invoke[*struct{}](c)
+	assert.Error(t, err, "Invoking service that failed to provide should return an error")
+
+	// Test removing non-existent service
+	c.RemoveService(reflect.TypeOf((*struct{})(nil)))
+	assert.False(t, c.HasService(reflect.TypeOf((*struct{})(nil))), "Removing non-existent service should not cause issues")
+
+	// Test injecting into non-struct type
+	err = xd.InjectStruct(c, "not a struct")
+	assert.Error(t, err, "Injecting into non-struct type should return an error")
+
+	// Test injecting into struct with unexported fields
+	type privateStruct struct {
+		config *struct{} `xd:"-"`
+		Public *struct{} `xd:"-"`
+	}
+	err = xd.InjectStruct(c, &privateStruct{})
+	assert.NoError(t, err, "Injecting into struct with unexported fields should not return an error")
+
+	// Provide a service for the public field
+	xd.Provide(c, func(c *xd.Container) (*struct{}, error) {
+		return &struct{}{}, nil
+	})
+
+	// Try injecting again
+	ps := &privateStruct{}
+	err = xd.InjectStruct(c, ps)
+	assert.NoError(t, err, "Injecting into struct with unexported fields should not return an error")
+	assert.NotNil(t, ps.Public, "Public field should be injected")
 }

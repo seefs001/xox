@@ -336,3 +336,88 @@ func TestErrorHandling(t *testing.T) {
 		assert.Empty(t, args)
 	})
 }
+
+func TestAdvancedQueries(t *testing.T) {
+	t.Run("WhereExists", func(t *testing.T) {
+		subquery := xsb.New[any]().
+			Table("orders").
+			Columns("1").
+			Where("orders.user_id = users.id").
+			Where("orders.total > ?", 1000)
+
+		builder := xsb.New[any]().
+			Table("users").
+			Columns("id", "name").
+			WhereExists(subquery)
+
+		query, args := builder.Build()
+		expectedQuery := "SELECT id, name FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id AND orders.total > ?)"
+		assert.Equal(t, expectedQuery, query)
+		assert.Equal(t, []interface{}{1000}, args)
+	})
+
+	t.Run("WhereNotExists", func(t *testing.T) {
+		subquery := xsb.New[any]().
+			Table("orders").
+			Columns("1").
+			Where("orders.user_id = users.id").
+			Where("orders.total > ?", 1000)
+
+		builder := xsb.New[any]().
+			Table("users").
+			Columns("id", "name").
+			WhereNotExists(subquery)
+
+		query, args := builder.Build()
+		expectedQuery := "SELECT id, name FROM users WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id AND orders.total > ?)"
+		assert.Equal(t, expectedQuery, query)
+		assert.Equal(t, []interface{}{1000}, args)
+	})
+
+	t.Run("IncrementAndDecrement", func(t *testing.T) {
+		builder := xsb.New[any]().
+			Table("products").
+			Increment("stock", 5).
+			Decrement("price", 2).
+			Where("id = ?", 1)
+
+		query, args := builder.BuildUpdate()
+		expectedQuery := "UPDATE products SET stock = stock + 5, price = price - 2 WHERE id = ?"
+		assert.Equal(t, expectedQuery, query)
+		assert.Equal(t, []interface{}{1}, args)
+	})
+
+	t.Run("InsertGetId", func(t *testing.T) {
+		// This test requires a real database connection, so we'll just check the query
+		builder := xsb.New[any]().
+			WithDialect(xsb.PostgreSQL).
+			Table("users").
+			Columns("name", "email").
+			Values("John Doe", "john@example.com")
+
+		query, args := builder.BuildInsert()
+		expectedQuery := "INSERT INTO users (name, email) VALUES (?, ?) RETURNING id"
+		assert.Equal(t, expectedQuery, query)
+		assert.Equal(t, []interface{}{"John Doe", "john@example.com"}, args)
+	})
+}
+
+func TestSanitize(t *testing.T) {
+	t.Run("RemoveComments", func(t *testing.T) {
+		input := "SELECT * FROM users; /* This is a comment */ -- Another comment"
+		expected := "SELECT * FROM users"
+		assert.Equal(t, expected, xsb.Sanitize(input))
+	})
+
+	t.Run("RemoveSemicolons", func(t *testing.T) {
+		input := "SELECT * FROM users; DROP TABLE users;"
+		expected := "SELECT * FROM users DROP TABLE users"
+		assert.Equal(t, expected, xsb.Sanitize(input))
+	})
+
+	t.Run("RemoveUnion", func(t *testing.T) {
+		input := "SELECT * FROM users UNION SELECT * FROM admins"
+		expected := "SELECT * FROM users SELECT * FROM admins"
+		assert.Equal(t, expected, xsb.Sanitize(input))
+	})
+}

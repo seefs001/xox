@@ -9,7 +9,6 @@ import (
 
 	"github.com/seefs001/xox/x"
 	"github.com/seefs001/xox/xerror"
-	"github.com/seefs001/xox/xlog"
 )
 
 func generateServiceName[T any]() string {
@@ -174,10 +173,11 @@ func InjectStruct[T any](c *Container, s T) error {
 func InjectStructNamed[T any](c *Container, s T, fieldNames map[string]string) error {
 	v := reflect.ValueOf(s)
 	if v.Kind() != reflect.Ptr {
-		xlog.Warn("InjectStructNamed: Non-pointer value passed, creating a new pointer", "type", reflect.TypeOf(s))
-		ptr := reflect.New(reflect.TypeOf(s))
-		ptr.Elem().Set(v)
-		v = ptr
+		return xerror.Errorf("InjectStructNamed: Non-pointer value passed")
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return xerror.Errorf("InjectStructNamed: Value is not a struct")
 	}
 	return injectStructNamedRecursive(c, v, fieldNames)
 }
@@ -197,50 +197,45 @@ func injectStructNamedRecursive(c *Container, v reflect.Value, fieldNames map[st
 		field := v.Field(i)
 		fieldType := t.Field(i)
 
-		tag := fieldType.Tag.Get("xd")
-		if tag != "-" {
-			if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
-				if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {
-					return xerror.Wrap(err, "failed to inject nested struct")
-				}
-			}
+		// Skip unexported fields
+		if !field.CanSet() {
 			continue
 		}
 
-		serviceName := fieldType.Type.String()
-		if fieldNames != nil {
-			if name, ok := fieldNames[fieldType.Name]; ok {
-				serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+		tag := fieldType.Tag.Get("xd")
+		if tag == "-" {
+			serviceName := fieldType.Type.String()
+			if fieldNames != nil {
+				if name, ok := fieldNames[fieldType.Name]; ok {
+					serviceName = fmt.Sprintf("%s:%s", serviceName, name)
+				}
 			}
-		}
 
-		c.mu.RLock()
-		service, exists := c.services[serviceName]
-		c.mu.RUnlock()
+			c.mu.RLock()
+			service, exists := c.services[serviceName]
+			c.mu.RUnlock()
 
-		if !exists {
-			return xerror.Errorf("service %s not found for field %s", serviceName, fieldType.Name)
-		}
-
-		serviceValue := reflect.ValueOf(service)
-		if field.Kind() != serviceValue.Kind() {
-			if field.Kind() == reflect.Ptr && serviceValue.Kind() != reflect.Ptr {
-				ptr := reflect.New(serviceValue.Type())
-				ptr.Elem().Set(serviceValue)
-				serviceValue = ptr
-			} else if field.Kind() != reflect.Ptr && serviceValue.Kind() == reflect.Ptr {
-				serviceValue = serviceValue.Elem()
-			} else {
-				return xerror.Errorf("incompatible types for field %s: expected %v, got %v",
-					fieldType.Name, field.Type(), serviceValue.Type())
+			if !exists {
+				// Skip if service not found, don't return error
+				continue
 			}
-		}
 
-		if !field.CanSet() {
-			return xerror.Errorf("cannot set field %s", fieldType.Name)
-		}
+			serviceValue := reflect.ValueOf(service)
+			if field.Kind() != serviceValue.Kind() {
+				if field.Kind() == reflect.Ptr && serviceValue.Kind() != reflect.Ptr {
+					ptr := reflect.New(serviceValue.Type())
+					ptr.Elem().Set(serviceValue)
+					serviceValue = ptr
+				} else if field.Kind() != reflect.Ptr && serviceValue.Kind() == reflect.Ptr {
+					serviceValue = serviceValue.Elem()
+				} else {
+					return xerror.Errorf("incompatible types for field %s: expected %v, got %v",
+						fieldType.Name, field.Type(), serviceValue.Type())
+				}
+			}
 
-		field.Set(serviceValue)
+			field.Set(serviceValue)
+		}
 
 		if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
 			if err := injectStructNamedRecursive(c, field, fieldNames); err != nil {

@@ -56,30 +56,30 @@ func main() {
 
 	// upload file
 	// Open the file to upload
-	file, err := os.Open("./examples/data/example.txt")
-	if err != nil {
-		xlog.Error("Failed to open file", "error", err)
-		return
-	}
-	defer file.Close()
+	// file, err := os.Open("./examples/data/example.txt")
+	// if err != nil {
+	// 	xlog.Error("Failed to open file", "error", err)
+	// 	return
+	// }
+	// defer file.Close()
 
-	// Upload the file
-	err = client.UploadFile(ctx, "test", fmt.Sprintf("%s-%s", x.Must1(x.RandomString(8, x.ModeAlpha)), "txt"), file)
-	if err != nil {
-		xlog.Error("Failed to upload file", "error", err)
-		return
-	}
-	xlog.Info("File uploaded successfully")
+	// // Upload the file
+	// err = client.UploadFile(ctx, "test", fmt.Sprintf("%s-%s", x.Must1(x.RandomString(8, x.ModeAlpha)), "txt"), file)
+	// if err != nil {
+	// 	xlog.Error("Failed to upload file", "error", err)
+	// 	return
+	// }
+	// xlog.Info("File uploaded successfully")
 
-	// list file info
-	fileInfo, err := client.ListFiles(ctx, "test", "")
-	if err != nil {
-		xlog.Error("Failed to list file info", "error", err)
-		return
-	}
-	xlog.Info("File info retrieved successfully", "info", fileInfo)
+	// // list file info
+	// fileInfo, err := client.ListFiles(ctx, "test", "")
+	// if err != nil {
+	// 	xlog.Error("Failed to list file info", "error", err)
+	// 	return
+	// }
+	// xlog.Info("File info retrieved successfully", "info", fileInfo)
 
-	return
+	// return
 	// Insert a new user
 	newUser := xsupabase.Record{
 		"name":  "John Doe",

@@ -321,25 +321,14 @@ type RotatingFileHandler struct {
 	flushTicker *time.Ticker
 	logChan     chan slog.Record
 	done        chan struct{}
+	writeCount  int
 }
 
 // NewRotatingFileHandler creates a new RotatingFileHandler.
 func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
-	// Set default values if not provided
-	if config.Filename == "" {
-		return nil, xerror.New("filename must be specified")
-	}
-	if config.MaxSize == 0 {
-		config.MaxSize = 100 * 1024 * 1024 // Default to 100MB
-	}
-	if config.MaxBackups == 0 {
-		config.MaxBackups = 3 // Default to 3 backups
-	}
-	if config.MaxAge == 0 {
-		config.MaxAge = 28 // Default to 28 days
-	}
-	if config.Level == 0 {
-		config.Level = slog.LevelDebug // Default to Info level
+	dir := filepath.Dir(config.Filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, xerror.Wrap(err, "failed to create log directory")
 	}
 
 	h := &RotatingFileHandler{
@@ -353,74 +342,41 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 		return nil, xerror.Wrap(err, "failed to rotate log file")
 	}
 
-	h.buffer = bufio.NewWriter(h.file)
-	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: config.Level})
+	h.flushTicker = time.NewTicker(time.Second)
 
-	// Start background worker
-	go h.processLogs()
-
-	// Start periodic flushing
-	h.flushTicker = time.NewTicker(1 * time.Second)
-	go h.periodicFlush()
+	go h.run()
 
 	return h, nil
 }
 
-// Handle queues the log record for processing.
+// Handle handles the log record.
 func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
-	select {
-	case h.logChan <- r:
-		return nil
-	default:
-		return xerror.New("log channel full")
-	}
-}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-// processLogs handles log records in the background.
-func (h *RotatingFileHandler) processLogs() {
-	for {
-		select {
-		case r, ok := <-h.logChan:
-			if !ok {
-				return
-			}
-			h.mu.Lock()
-			if h.shouldRotate() {
-				if err := h.rotate(); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to rotate log file: %v\n", err)
-					h.mu.Unlock()
-					continue
-				}
-			}
-
-			err := h.Handler.Handle(context.Background(), r)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to handle log record: %v\n", err)
-			}
-
-			// Update size after successful write
-			h.size += int64(len(r.Message) + 100) // 100 is a rough estimate for metadata
-			h.mu.Unlock()
-		case <-h.done:
-			return
+	if h.shouldRotate() {
+		if err := h.rotate(); err != nil {
+			return err
 		}
 	}
+
+	err := h.Handler.Handle(ctx, r)
+	if err != nil {
+		return err
+	}
+
+	h.size += int64(len(r.Message))
+	r.Attrs(func(a slog.Attr) bool {
+		h.size += int64(len(a.Key) + len(a.Value.String()))
+		return true
+	})
+	h.writeCount++
+
+	return nil
 }
 
-// shouldRotate checks if the file should be rotated
-func (h *RotatingFileHandler) shouldRotate() bool {
-	return !isSameDay(h.lastRotate, time.Now())
-}
-
-// isSameDay checks if two times are in the same day
-func isSameDay(t1, t2 time.Time) bool {
-	y1, m1, d1 := t1.Date()
-	y2, m2, d2 := t2.Date()
-	return y1 == y2 && m1 == m2 && d1 == d2
-}
-
-// periodicFlush flushes the buffer periodically.
-func (h *RotatingFileHandler) periodicFlush() {
+// run runs the background worker.
+func (h *RotatingFileHandler) run() {
 	for {
 		select {
 		case <-h.flushTicker.C:
@@ -432,6 +388,18 @@ func (h *RotatingFileHandler) periodicFlush() {
 			return
 		}
 	}
+}
+
+// shouldRotate checks if the file should be rotated
+func (h *RotatingFileHandler) shouldRotate() bool {
+	return h.size >= h.config.MaxSize || !isSameDay(h.lastRotate, time.Now()) || h.writeCount >= 10
+}
+
+// isSameDay checks if two times are in the same day
+func isSameDay(t1, t2 time.Time) bool {
+	y1, m1, d1 := t1.Date()
+	y2, m2, d2 := t2.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
 }
 
 // updateFileSize updates the current file size
@@ -449,7 +417,7 @@ func (h *RotatingFileHandler) rotate() error {
 	}
 
 	now := time.Now()
-	newFilename := fmt.Sprintf("%s-%s", now.Format("2006-01-02"), filepath.Base(h.config.Filename))
+	newFilename := fmt.Sprintf("%s-%s", now.Format("2006-01-02-15-04-05"), filepath.Base(h.config.Filename))
 	newFilePath := filepath.Join(filepath.Dir(h.config.Filename), newFilename)
 
 	// Open new file
@@ -461,8 +429,9 @@ func (h *RotatingFileHandler) rotate() error {
 	h.file = file
 	h.size = 0
 	h.lastRotate = now
+	h.writeCount = 0
 	h.buffer = bufio.NewWriter(h.file)
-	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: h.config.Level})
+	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: h.config.Level, AddSource: true})
 
 	// Remove old files
 	h.removeOldFiles()
@@ -587,7 +556,7 @@ func NewFixedFileHandler(filename string, level slog.Level) (*FixedFileHandler, 
 	}
 
 	h.buffer = bufio.NewWriter(h.file)
-	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: level})
+	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: level, AddSource: true})
 
 	// Start periodic flushing
 	go func() {
