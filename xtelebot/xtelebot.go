@@ -589,85 +589,6 @@ func WithParseMode(mode string) MessageOption {
 	}
 }
 
-// Update represents a Telegram update
-type Update struct {
-	UpdateID      int            `json:"update_id"`
-	Message       *Message       `json:"message"`
-	CallbackQuery *CallbackQuery `json:"callback_query"`
-}
-
-// Message represents a Telegram message
-type Message struct {
-	MessageID int         `json:"message_id"`
-	Text      string      `json:"text"`
-	Chat      Chat        `json:"chat"`
-	From      User        `json:"from"`
-	Date      int         `json:"date"`
-	Photo     []PhotoSize `json:"photo,omitempty"`
-	Document  Document    `json:"document,omitempty"`
-	Location  Location    `json:"location,omitempty"`
-}
-
-// Chat represents a Telegram chat
-type Chat struct {
-	ID        int64  `json:"id"`
-	Type      string `json:"type"`
-	Title     string `json:"title,omitempty"`
-	Username  string `json:"username,omitempty"`
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
-}
-
-// User represents a Telegram user
-type User struct {
-	ID                      int    `json:"id"`
-	IsBot                   bool   `json:"is_bot"`
-	FirstName               string `json:"first_name"`
-	LastName                string `json:"last_name,omitempty"`
-	Username                string `json:"username,omitempty"`
-	LanguageCode            string `json:"language_code,omitempty"`
-	CanJoinGroups           bool   `json:"can_join_groups,omitempty"`
-	CanReadAllGroupMessages bool   `json:"can_read_all_group_messages,omitempty"`
-	SupportsInlineQueries   bool   `json:"supports_inline_queries,omitempty"`
-}
-
-// PhotoSize represents one size of a photo or a file / sticker thumbnail
-type PhotoSize struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	Width        int    `json:"width"`
-	Height       int    `json:"height"`
-	FileSize     int    `json:"file_size,omitempty"`
-}
-
-// Document represents a general file
-type Document struct {
-	FileID       string    `json:"file_id"`
-	FileUniqueID string    `json:"file_unique_id"`
-	Thumb        PhotoSize `json:"thumb,omitempty"`
-	FileName     string    `json:"file_name,omitempty"`
-	MimeType     string    `json:"mime_type,omitempty"`
-	FileSize     int       `json:"file_size,omitempty"`
-}
-
-// Location represents a point on the map
-type Location struct {
-	Longitude float64 `json:"longitude"`
-	Latitude  float64 `json:"latitude"`
-}
-
-// InlineKeyboardMarkup represents an inline keyboard
-type InlineKeyboardMarkup struct {
-	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
-}
-
-// InlineKeyboardButton represents one button of an inline keyboard
-type InlineKeyboardButton struct {
-	Text         string `json:"text"`
-	URL          string `json:"url,omitempty"`
-	CallbackData string `json:"callback_data,omitempty"`
-}
-
 // NewInlineKeyboardMarkup creates a new inline keyboard markup
 func NewInlineKeyboardMarkup(buttons ...[]InlineKeyboardButton) InlineKeyboardMarkup {
 	return InlineKeyboardMarkup{InlineKeyboard: buttons}
@@ -677,20 +598,9 @@ func NewInlineKeyboardMarkup(buttons ...[]InlineKeyboardButton) InlineKeyboardMa
 func NewInlineKeyboardButton(text, url, callbackData string) InlineKeyboardButton {
 	return InlineKeyboardButton{
 		Text:         text,
-		URL:          url,
-		CallbackData: callbackData,
+		URL:          &url,
+		CallbackData: &callbackData,
 	}
-}
-
-// CallbackQuery represents an incoming callback query from a callback button in an inline keyboard
-type CallbackQuery struct {
-	ID              string   `json:"id"`
-	From            User     `json:"from"`
-	Message         *Message `json:"message,omitempty"`
-	InlineMessageID string   `json:"inline_message_id,omitempty"`
-	ChatInstance    string   `json:"chat_instance"`
-	Data            string   `json:"data,omitempty"`
-	GameShortName   string   `json:"game_short_name,omitempty"`
 }
 
 // AnswerCallbackQuery sends a response to a callback query
@@ -808,23 +718,6 @@ func WithCertificate(cert string) WebhookOption {
 	return func(v url.Values) {
 		v.Set(ParamCertificate, cert)
 	}
-}
-
-// WebhookInfo contains information about the current status of a webhook
-type WebhookInfo struct {
-	URL                  string   `json:"url"`
-	HasCustomCertificate bool     `json:"has_custom_certificate"`
-	PendingUpdateCount   int      `json:"pending_update_count"`
-	LastErrorDate        int      `json:"last_error_date"`
-	LastErrorMessage     string   `json:"last_error_message"`
-	MaxConnections       int      `json:"max_connections"`
-	AllowedUpdates       []string `json:"allowed_updates"`
-}
-
-// BotCommand represents a bot command
-type BotCommand struct {
-	Command     string `json:"command"`
-	Description string `json:"description"`
 }
 
 // SetMyCommands sets the list of the bot's commands
@@ -1265,17 +1158,6 @@ func WithCaption(caption string) MessageOption {
 	}
 }
 
-// MessageEntity represents one special entity in a text message
-type MessageEntity struct {
-	Type          string `json:"type"`
-	Offset        int    `json:"offset"`
-	Length        int    `json:"length"`
-	URL           string `json:"url,omitempty"`
-	User          *User  `json:"user,omitempty"`
-	Language      string `json:"language,omitempty"`
-	CustomEmojiID string `json:"custom_emoji_id,omitempty"`
-}
-
 // WithEntities sets the entities parameter
 func WithEntities(entities []MessageEntity) MessageOption {
 	return func(v url.Values) {
@@ -1310,77 +1192,6 @@ type InputMediaPhoto struct {
 
 func (imp InputMediaPhoto) GetType() string {
 	return "photo"
-}
-
-// InputMediaVideo represents a video to be sent
-type InputMediaVideo struct {
-	Type                  string          `json:"type"`
-	Media                 string          `json:"media"`
-	Thumbnail             string          `json:"thumbnail,omitempty"`
-	Caption               string          `json:"caption,omitempty"`
-	ParseMode             string          `json:"parse_mode,omitempty"`
-	CaptionEntities       []MessageEntity `json:"caption_entities,omitempty"`
-	ShowCaptionAboveMedia bool            `json:"show_caption_above_media,omitempty"`
-	Width                 int             `json:"width,omitempty"`
-	Height                int             `json:"height,omitempty"`
-	Duration              int             `json:"duration,omitempty"`
-	SupportsStreaming     bool            `json:"supports_streaming,omitempty"`
-	HasSpoiler            bool            `json:"has_spoiler,omitempty"`
-}
-
-func (imv InputMediaVideo) GetType() string {
-	return "video"
-}
-
-// InputMediaAnimation represents an animation file to be sent
-type InputMediaAnimation struct {
-	Type                  string          `json:"type"`
-	Media                 string          `json:"media"`
-	Thumbnail             string          `json:"thumbnail,omitempty"`
-	Caption               string          `json:"caption,omitempty"`
-	ParseMode             string          `json:"parse_mode,omitempty"`
-	CaptionEntities       []MessageEntity `json:"caption_entities,omitempty"`
-	ShowCaptionAboveMedia bool            `json:"show_caption_above_media,omitempty"`
-	Width                 int             `json:"width,omitempty"`
-	Height                int             `json:"height,omitempty"`
-	Duration              int             `json:"duration,omitempty"`
-	HasSpoiler            bool            `json:"has_spoiler,omitempty"`
-}
-
-func (ima InputMediaAnimation) GetType() string {
-	return "animation"
-}
-
-// InputMediaAudio represents an audio file to be sent
-type InputMediaAudio struct {
-	Type            string          `json:"type"`
-	Media           string          `json:"media"`
-	Thumbnail       string          `json:"thumbnail,omitempty"`
-	Caption         string          `json:"caption,omitempty"`
-	ParseMode       string          `json:"parse_mode,omitempty"`
-	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
-	Duration        int             `json:"duration,omitempty"`
-	Performer       string          `json:"performer,omitempty"`
-	Title           string          `json:"title,omitempty"`
-}
-
-func (ima InputMediaAudio) GetType() string {
-	return "audio"
-}
-
-// InputMediaDocument represents a general file to be sent
-type InputMediaDocument struct {
-	Type                        string          `json:"type"`
-	Media                       string          `json:"media"`
-	Thumbnail                   string          `json:"thumbnail,omitempty"`
-	Caption                     string          `json:"caption,omitempty"`
-	ParseMode                   string          `json:"parse_mode,omitempty"`
-	CaptionEntities             []MessageEntity `json:"caption_entities,omitempty"`
-	DisableContentTypeDetection bool            `json:"disable_content_type_detection,omitempty"`
-}
-
-func (imd InputMediaDocument) GetType() string {
-	return "document"
 }
 
 // WithMedia sets the media parameter

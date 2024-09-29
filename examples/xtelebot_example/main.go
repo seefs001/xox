@@ -353,7 +353,7 @@ func getBotInfo(ctx context.Context, bot *xtelebot.Bot) {
 	xlog.Info("Bot information retrieved successfully",
 		"id", botInfo.ID,
 		"name", botInfo.FirstName,
-		"username", botInfo.Username,
+		"username", botInfo.UserName,
 		"can_join_groups", botInfo.CanJoinGroups,
 		"can_read_all_group_messages", botInfo.CanReadAllGroupMessages,
 		"supports_inline_queries", botInfo.SupportsInlineQueries,
@@ -363,16 +363,16 @@ func getBotInfo(ctx context.Context, bot *xtelebot.Bot) {
 // New handlers for different types of messages
 
 func textHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
-	xlog.Info("Received text message", "from", update.Message.From.Username, "text", update.Message.Text)
+	xlog.Info("Received text message", "from", update.Message.From.UserName, "text", update.Message.Text)
 	// Add your text message handling logic here
 }
 
 func privateHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
-	xlog.Info("Received private message", "from", update.Message.From.Username)
+	xlog.Info("Received private message", "from", update.Message.From.UserName)
 	// Add your private message handling logic here
 }
 
 func groupHandler(ctx context.Context, bot *xtelebot.Bot, update xtelebot.Update) {
-	xlog.Info("Received group message", "from", update.Message.From.Username, "group", update.Message.Chat.Title)
+	xlog.Info("Received group message", "from", update.Message.From.UserName, "group", update.Message.Chat.Title)
 	// Add your group message handling logic here
 }

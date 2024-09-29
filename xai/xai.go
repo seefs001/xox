@@ -390,7 +390,6 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 					}
 				}
 
-				// If we have accumulated some data but haven't output in a while, flush it
 				if buffer.Len() >= minChunkSize && time.Since(lastOutputTime) >= maxOutputInterval {
 					flushBuffer()
 				}
@@ -401,7 +400,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 	return textChan, errChan
 }
 
-func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string, body interface{}, isMidjourney bool) (*http.Response, error) {
+func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string, body map[string]interface{}, isMidjourney bool) (*http.Response, error) {
 	var resp *http.Response
 	var err error
 
@@ -416,17 +415,10 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 			SetBearerToken(c.apiKey).
 			Get(ctx, endpoint)
 	case http.MethodPost:
-		if jsonBody, ok := body.(map[string]interface{}); ok {
-			resp, err = c.httpClient.
-				SetBaseURL(c.baseURL).
-				SetBearerToken(c.apiKey).
-				PostJSON(ctx, endpoint, jsonBody)
-		} else {
-			resp, err = c.httpClient.
-				SetBaseURL(c.baseURL).
-				SetBearerToken(c.apiKey).
-				Post(ctx, endpoint, body)
-		}
+		resp, err = c.httpClient.
+			SetBaseURL(c.baseURL).
+			SetBearerToken(c.apiKey).
+			PostJSON(ctx, endpoint, body)
 	default:
 		return nil, xerror.Newf("unsupported HTTP method: %s", method)
 	}
@@ -565,9 +557,9 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, input []string, mod
 		model = DefaultEmbeddingModel
 	}
 
-	requestBody := EmbeddingRequest{
-		Model: model,
-		Input: input,
+	requestBody := map[string]interface{}{
+		"model": model,
+		"input": input,
 	}
 
 	resp, err := c.sendRequest(ctx, http.MethodPost, EmbeddingsURL, requestBody, false)
@@ -595,8 +587,8 @@ func (c *OpenAIClient) GetMidjourneyStatus(ctx context.Context, jobID string) (*
 }
 
 // ActMidjourney is a convenience method for generating an image based on the provided prompt using Midjourney
-func (c *OpenAIClient) ActMidjourney(ctx context.Context, action_content string, job_id string) (*MidjourneyResponse, error) {
-	return c.GenerateImageWithMidjourney(ctx, job_id, WithMidjourneyAction(MidjourneyActionAction), WithMidjourneyActionContent(action_content))
+func (c *OpenAIClient) ActMidjourney(ctx context.Context, actionContent string, jobID string) (*MidjourneyResponse, error) {
+	return c.GenerateImageWithMidjourney(ctx, jobID, WithMidjourneyAction(MidjourneyActionAction), WithMidjourneyActionContent(actionContent))
 }
 
 // GetFileIDFromMidjourneySuccessResponse parses the file ID from a successful Midjourney response
@@ -605,7 +597,6 @@ func GetFileIDFromMidjourneySuccessResponse(response *MidjourneyResponse) (strin
 		return "", fmt.Errorf("invalid response format")
 	}
 
-	// Extract the file ID from the result string
 	parts := strings.Split(response.Buttons[0].CustomID, "::")
 	if len(parts) < 3 {
 		return "", fmt.Errorf("invalid result format")
@@ -635,8 +626,6 @@ const (
 )
 
 // BuildMidjourneyActionContent builds the action content for Midjourney
-// number 1-4
-// fileID from MidjourneyResponse-> GetFileIDFromMidjourneySuccessResponse
 func BuildMidjourneyActionContent(action, number, fileID string) string {
 	switch action {
 	case MJCustomZoom, MJBOOKMARK:
@@ -699,10 +688,6 @@ func (c *OpenAIClient) GenerateImageWithMidjourney(ctx context.Context, prompt s
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
-	// if result.Code != 1 {
-	// 	return nil, fmt.Errorf("API request failed: %s", result.Description)
-	// }
-
 	return &result, nil
 }
 
@@ -742,13 +727,26 @@ type MidjourneyResponse struct {
 
 // GenerateImage generates an image based on the provided prompt
 func (c *OpenAIClient) GenerateImage(ctx context.Context, prompt string, options ...func(*ImageGenerationRequest)) ([]string, error) {
-	requestBody := ImageGenerationRequest{
-		Model:  DefaultImageModel,
-		Prompt: prompt,
+	requestBody := map[string]interface{}{
+		"model":  DefaultImageModel,
+		"prompt": prompt,
 	}
 
 	for _, option := range options {
-		option(&requestBody)
+		var opts ImageGenerationRequest
+		option(&opts)
+		if opts.N != 0 {
+			requestBody["n"] = opts.N
+		}
+		if opts.Size != "" {
+			requestBody["size"] = opts.Size
+		}
+		if opts.Quality != "" {
+			requestBody["quality"] = opts.Quality
+		}
+		if opts.ResponseFormat != "" {
+			requestBody["response_format"] = opts.ResponseFormat
+		}
 	}
 
 	resp, err := c.sendRequest(ctx, http.MethodPost, ImageGenerationURL, requestBody, false)

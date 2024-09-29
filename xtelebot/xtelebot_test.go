@@ -58,7 +58,7 @@ func TestGetMe(t *testing.T) {
 	assert.Equal(t, 123, user.ID)
 	assert.True(t, user.IsBot)
 	assert.Equal(t, "TestBot", user.FirstName)
-	assert.Equal(t, "test_bot", user.Username)
+	assert.Equal(t, "test_bot", user.UserName)
 }
 
 func TestSendMessage(t *testing.T) {
