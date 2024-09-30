@@ -133,7 +133,7 @@ func NewClient(options ...ClientOption) (*Client, error) {
 			},
 		},
 		retryConfig: RetryConfig{
-			Enabled:    true, // Set this to true by default
+			Enabled:    false, // Disable retry by default
 			Count:      defaultRetryCount,
 			MaxBackoff: defaultMaxBackoff,
 		},
@@ -184,6 +184,9 @@ func WithRetryConfig(config RetryConfig) ClientOption {
 // WithUserAgent sets the User-Agent header for all requests
 func WithUserAgent(userAgent string) ClientOption {
 	return func(c *Client) error {
+		if userAgent == "" {
+			userAgent = defaultUserAgent
+		}
 		c.userAgent = userAgent
 		c.headers.Set("User-Agent", userAgent)
 		return nil
@@ -235,18 +238,30 @@ func (c *Client) SetLogOptions(options LogOptions) {
 
 // SetBaseURL sets the base URL for all requests
 func (c *Client) SetBaseURL(url string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set base URL", "error", err)
+		return c
+	}
 	c.baseURL = url
 	return c
 }
 
 // SetHeader sets a header for all requests
 func (c *Client) SetHeader(key, value string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set header", "error", err)
+		return c
+	}
 	c.headers.Set(key, value)
 	return c
 }
 
 // SetHeaders sets multiple headers for all requests
 func (c *Client) SetHeaders(headers map[string]string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set headers", "error", err)
+		return c
+	}
 	for k, v := range headers {
 		c.headers.Set(k, v)
 	}
@@ -255,18 +270,33 @@ func (c *Client) SetHeaders(headers map[string]string) *Client {
 
 // AddCookie adds a cookie for all requests
 func (c *Client) AddCookie(cookie *http.Cookie) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to add cookie", "error", err)
+		return c
+	}
 	c.cookies = append(c.cookies, cookie)
 	return c
 }
 
 // SetQueryParam sets a query parameter for all requests
 func (c *Client) SetQueryParam(key, value string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set query parameter", "error", err)
+		return c
+	}
+	if c.queryParams == nil {
+		c.queryParams = make(url.Values)
+	}
 	c.queryParams.Set(key, value)
 	return c
 }
 
 // SetQueryParams sets multiple query parameters for all requests
 func (c *Client) SetQueryParams(params map[string]string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set query parameters", "error", err)
+		return c
+	}
 	for k, v := range params {
 		c.queryParams.Set(k, v)
 	}
@@ -275,6 +305,13 @@ func (c *Client) SetQueryParams(params map[string]string) *Client {
 
 // SetFormData sets form data for all requests
 func (c *Client) SetFormData(data map[string]string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set form data", "error", err)
+		return c
+	}
+	if c.formData == nil {
+		c.formData = make(url.Values)
+	}
 	for k, v := range data {
 		c.formData.Set(k, v)
 	}
@@ -283,21 +320,33 @@ func (c *Client) SetFormData(data map[string]string) *Client {
 
 // SetBasicAuth sets basic auth for all requests
 func (c *Client) SetBasicAuth(username, password string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set basic auth", "error", err)
+		return c
+	}
 	c.SetHeader("Authorization", "Basic "+basicAuth(username, password))
 	return c
 }
 
 // SetBearerToken sets bearer auth token for all requests
 func (c *Client) SetBearerToken(token string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set bearer token", "error", err)
+		return c
+	}
 	c.authToken = token
 	return c
 }
 
 // AddQueryParam adds a query parameter for all requests
 func (c *Client) AddQueryParam(key string, value interface{}) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to add query parameter", "error", err)
+		return c
+	}
 	strValue, err := xcast.ToString(value)
 	if err != nil {
-		xlog.Warnf("Failed to convert value to string: %v", err)
+		xlog.Warn("Failed to convert value to string", "error", err)
 		return c
 	}
 	c.queryParams.Add(key, strValue)
@@ -306,9 +355,13 @@ func (c *Client) AddQueryParam(key string, value interface{}) *Client {
 
 // AddFormDataField adds a form data field for all requests
 func (c *Client) AddFormDataField(key string, value interface{}) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to add form data field", "error", err)
+		return c
+	}
 	strValue, err := xcast.ToString(value)
 	if err != nil {
-		xlog.Warnf("Failed to convert value to string: %v", err)
+		xlog.Warn("Failed to convert value to string", "error", err)
 		return c
 	}
 	c.formData.Add(key, strValue)
@@ -316,11 +369,20 @@ func (c *Client) AddFormDataField(key string, value interface{}) *Client {
 }
 
 // Request performs an HTTP request
-func (c *Client) Request(ctx context.Context, method, url string, body interface{}) (*http.Response, error) {
-	fullURL := url
-	if !isAbsoluteURL(url) && c.baseURL != "" {
-		fullURL = c.baseURL + url
+func (c *Client) Request(ctx context.Context, method, req_url string, body interface{}) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
 	}
+	fullURL := req_url
+	if !isAbsoluteURL(req_url) && c.baseURL != "" {
+		fullURL = c.baseURL + req_url
+	}
+
+	// Validate URL
+	if _, err := url.Parse(fullURL); err != nil {
+		return nil, xerror.Wrap(err, "invalid URL")
+	}
+
 	var bodyReader io.Reader
 	if body != nil {
 		switch v := body.(type) {
@@ -343,26 +405,41 @@ func (c *Client) Request(ctx context.Context, method, url string, body interface
 
 // Get performs a GET request
 func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
 	return c.Request(ctx, http.MethodGet, url, nil)
 }
 
 // Post performs a POST request
 func (c *Client) Post(ctx context.Context, url string, body interface{}) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
 	return c.Request(ctx, http.MethodPost, url, body)
 }
 
 // Put performs a PUT request
 func (c *Client) Put(ctx context.Context, url string, body interface{}) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
 	return c.Request(ctx, http.MethodPut, url, body)
 }
 
 // Patch performs a PATCH request
 func (c *Client) Patch(ctx context.Context, url string, body interface{}) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
 	return c.Request(ctx, http.MethodPatch, url, body)
 }
 
 // Delete performs a DELETE request
 func (c *Client) Delete(ctx context.Context, url string) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
 	return c.Request(ctx, http.MethodDelete, url, nil)
 }
 
@@ -791,25 +868,17 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	var err error
 
-	operation := func() error {
-		resp, err = c.client.Do(req)
-		if err != nil {
-			return xerror.Wrap(err, "failed to send request")
-		}
-		if resp.StatusCode >= 500 {
-			return xerror.Newf("server error: %d", resp.StatusCode)
-		}
-		return nil
-	}
-
 	if c.retryConfig.Enabled {
-		err = c.retryWithBackoff(req.Context(), operation)
+		err = c.retryWithBackoff(req.Context(), func() error {
+			resp, err = c.client.Do(req)
+			return err
+		})
 	} else {
-		err = operation()
+		resp, err = c.client.Do(req)
 	}
 
 	if err != nil {
-		return nil, xerror.Wrap(err, "request failed after retries")
+		return nil, xerror.Wrap(err, "request failed")
 	}
 
 	if c.debug && c.logOptions.LogResponse {
@@ -825,8 +894,13 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 		return nil, xerror.Wrap(err, "failed to create request")
 	}
 
-	// Set default headers
+	// Ensure User-Agent is set
+	if c.userAgent == "" {
+		c.userAgent = defaultUserAgent
+	}
 	req.Header.Set("User-Agent", c.userAgent)
+
+	// Set default headers
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
@@ -854,7 +928,6 @@ func (c *Client) createRequest(ctx context.Context, method, reqURL string, body 
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
 
-	// 在设置其他 header 之后，添加以下代码
 	if c.forceContentType != "" {
 		req.Header.Set("Content-Type", c.forceContentType)
 	}
@@ -891,6 +964,11 @@ func (c *Client) retryWithBackoff(ctx context.Context, operation func() error) e
 }
 
 func (c *Client) logRequest(req *http.Request) {
+	if req == nil {
+		xlog.Warn("Attempted to log nil request")
+		return
+	}
+
 	xlog.Debug("HTTP Request",
 		"method", req.Method,
 		"url", req.URL.String(),
@@ -929,7 +1007,7 @@ func (c *Client) logRequest(req *http.Request) {
 
 func (c *Client) logResponse(resp *http.Response) {
 	if resp == nil {
-		xlog.Warn("Received nil response")
+		xlog.Warn("Attempted to log nil response")
 		return
 	}
 
@@ -1050,6 +1128,10 @@ func (c *Client) createRequestWithBody(ctx context.Context, method, url string, 
 
 // SetForceContentType sets the Content-Type header for all requests
 func (c *Client) SetForceContentType(contentType string) *Client {
+	if err := c.validateClient(); err != nil {
+		xlog.Error("Failed to set force content type", "error", err)
+		return c
+	}
 	c.forceContentType = contentType
 	return c
 }
@@ -1059,4 +1141,45 @@ var defaultClient = x.Must1(NewClient())
 // GetDefaultClient returns the default client
 func GetDefaultClient() *Client {
 	return defaultClient
+}
+
+// Add this new method to validate the client
+func (c *Client) validateClient() error {
+	if c == nil {
+		return xerror.New("client is nil")
+	}
+	if c.client == nil {
+		return xerror.New("http client is nil")
+	}
+	return nil
+}
+
+// GetJSONAndDecode sends a GET request and decodes the JSON response into the provided interface
+func (c *Client) GetJSONAndDecode(ctx context.Context, url string, result interface{}) error {
+	resp, err := c.Get(ctx, url)
+	if err != nil {
+		return xerror.Wrap(err, "failed to send GET request")
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		return xerror.Wrap(err, "failed to decode response body")
+	}
+
+	return nil
+}
+
+// PostJSONAndDecode sends a POST request with JSON body and decodes the response into the provided interface
+func (c *Client) PostJSONAndDecode(ctx context.Context, url string, body JSONBody, result interface{}) error {
+	resp, err := c.PostJSON(ctx, url, body)
+	if err != nil {
+		return xerror.Wrap(err, "failed to send POST request")
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		return xerror.Wrap(err, "failed to decode response body")
+	}
+
+	return nil
 }
