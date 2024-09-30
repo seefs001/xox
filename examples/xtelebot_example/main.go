@@ -226,9 +226,18 @@ func sendWelcomeMessage(ctx context.Context, bot *xtelebot.Bot, chatID interface
 	sendMessage(ctx, bot, chatID, welcomeMessage)
 }
 
-func sendGreeting(ctx context.Context, bot *xtelebot.Bot, chatID interface{}, name string) {
+func sendGreeting(ctx context.Context, bot *xtelebot.Bot, chatID int64, name string) {
 	greeting := fmt.Sprintf("Hello, %s! How are you today?", name)
+	xlog.Info("chatID", "data", chatID)
 	sendMessage(ctx, bot, chatID, greeting)
+	sendDiceParam := xtelebot.DiceConfig{
+		Emoji: "🎲",
+		BaseChat: xtelebot.BaseChat{
+			ChatID: chatID,
+		},
+	}
+
+	bot.APIRequestWithObject(ctx, sendDiceParam.Method(), sendDiceParam)
 }
 
 func sendPhoto(ctx context.Context, bot *xtelebot.Bot, chatID interface{}) {

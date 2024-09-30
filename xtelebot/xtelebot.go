@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xhttpc"
 	"github.com/seefs001/xox/xlog"
 )
@@ -226,6 +227,18 @@ var urlValuesMethods = []string{
 	MethodGetUpdates,
 	MethodGetWebhookInfo,
 	MethodGetMyCommands,
+}
+
+func (b *Bot) APIRequestWithObject(ctx context.Context, method string, params interface{}) ([]byte, error) {
+	jsonData, err := x.ToJSON(params)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to convert params to JSON")
+	}
+	values, err := x.JSONToURLValues(jsonData)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to convert JSON to URL values")
+	}
+	return b.APIRequest(ctx, method, values)
 }
 
 func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) ([]byte, error) {

@@ -3734,7 +3734,7 @@ const (
 // Chattable is any config type that can be sent.
 type Chattable interface {
 	params() (Params, error)
-	method() string
+	Method() string
 }
 
 // Fileable is any config type that can be sent that includes a file.
@@ -3746,9 +3746,9 @@ type Fileable interface {
 // RequestFile represents a file associated with a field name.
 type RequestFile struct {
 	// The file field name.
-	Name string
+	Name string `json:"name"`
 	// The file data to include.
-	Data RequestFileData
+	Data RequestFileData `json:"data"`
 }
 
 // RequestFileData represents the data to be used for a file.
@@ -3767,8 +3767,8 @@ type RequestFileData interface {
 // FileBytes contains information about a set of bytes to upload
 // as a File.
 type FileBytes struct {
-	Name  string
-	Bytes []byte
+	Name  string `json:"name"`
+	Bytes []byte `json:"bytes"`
 }
 
 func (fb FileBytes) NeedsUpload() bool {
@@ -3785,8 +3785,8 @@ func (fb FileBytes) SendData() string {
 
 // FileReader contains information about a reader to upload as a File.
 type FileReader struct {
-	Name   string
-	Reader io.Reader
+	Name   string    `json:"name"`
+	Reader io.Reader `json:"reader"`
 }
 
 func (fr FileReader) NeedsUpload() bool {
@@ -3872,7 +3872,7 @@ func (fa fileAttach) SendData() string {
 // Note that you may not log back in for at least 10 minutes.
 type LogOutConfig struct{}
 
-func (LogOutConfig) method() string {
+func (LogOutConfig) Method() string {
 	return "logOut"
 }
 
@@ -3886,7 +3886,7 @@ func (LogOutConfig) params() (Params, error) {
 // bot has started.
 type CloseConfig struct{}
 
-func (CloseConfig) method() string {
+func (CloseConfig) Method() string {
 	return "close"
 }
 
@@ -3896,80 +3896,81 @@ func (CloseConfig) params() (Params, error) {
 
 // BaseChat is base type for all chat config types.
 type BaseChat struct {
-	ChatID                   int64 // required
-	ChannelUsername          string
-	ProtectContent           bool
-	ReplyToMessageID         int
-	ReplyMarkup              interface{}
-	DisableNotification      bool
-	AllowSendingWithoutReply bool
+	// user_id(int64) or username
+	ChatID                   int64       `json:"chat_id"`                       // required
+	ChannelUsername          string      `json:"channel_username,omitempty"`    // optional
+	ProtectContent           bool        `json:"protect_content,omitempty"`     // optional
+	ReplyToMessageID         int         `json:"reply_to_message_id,omitempty"` // optional
+	ReplyMarkup              interface{} `json:"reply_markup,omitempty"`        // optional
+	DisableNotification      bool        `json:"disable_notification,omitempty"`
+	AllowSendingWithoutReply bool        `json:"allow_sending_without_reply,omitempty"`
 }
 
 // BaseFile is a base type for all file config types.
 type BaseFile struct {
 	BaseChat
-	File RequestFileData
+	File RequestFileData `json:"file"`
 }
 
 // BaseEdit is base type of all chat edits.
 type BaseEdit struct {
-	ChatID          int64
-	ChannelUsername string
-	MessageID       int
-	InlineMessageID string
-	ReplyMarkup     *InlineKeyboardMarkup
+	ChatID          int64                 `json:"chat_id"`
+	ChannelUsername string                `json:"channel_username,omitempty"`
+	MessageID       int                   `json:"message_id"`
+	InlineMessageID string                `json:"inline_message_id,omitempty"`
+	ReplyMarkup     *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 // MessageConfig contains information about a SendMessage request.
 type MessageConfig struct {
 	BaseChat
-	Text                  string
-	ParseMode             string
-	Entities              []MessageEntity
-	DisableWebPagePreview bool
+	Text                  string          `json:"text"`
+	ParseMode             string          `json:"parse_mode,omitempty"`
+	Entities              []MessageEntity `json:"entities,omitempty"`
+	DisableWebPagePreview bool            `json:"disable_web_page_preview,omitempty"`
 }
 
-func (config MessageConfig) method() string {
+func (config MessageConfig) Method() string {
 	return "sendMessage"
 }
 
 // ForwardConfig contains information about a ForwardMessage request.
 type ForwardConfig struct {
 	BaseChat
-	FromChatID          int64 // required
-	FromChannelUsername string
-	MessageID           int // required
+	FromChatID          int64  `json:"from_chat_id"` // required
+	FromChannelUsername string `json:"from_channel_username,omitempty"`
+	MessageID           int    `json:"message_id"` // required
 }
 
-func (config ForwardConfig) method() string {
+func (config ForwardConfig) Method() string {
 	return "forwardMessage"
 }
 
 // CopyMessageConfig contains information about a copyMessage request.
 type CopyMessageConfig struct {
 	BaseChat
-	FromChatID          int64
-	FromChannelUsername string
-	MessageID           int
-	Caption             string
-	ParseMode           string
-	CaptionEntities     []MessageEntity
+	FromChatID          int64           `json:"from_chat_id"`
+	FromChannelUsername string          `json:"from_channel_username,omitempty"`
+	MessageID           int             `json:"message_id"`
+	Caption             string          `json:"caption"`
+	ParseMode           string          `json:"parse_mode,omitempty"`
+	CaptionEntities     []MessageEntity `json:"caption_entities,omitempty"`
 }
 
-func (config CopyMessageConfig) method() string {
+func (config CopyMessageConfig) Method() string {
 	return "copyMessage"
 }
 
 // PhotoConfig contains information about a SendPhoto request.
 type PhotoConfig struct {
 	BaseFile
-	Thumb           RequestFileData
-	Caption         string
-	ParseMode       string
-	CaptionEntities []MessageEntity
+	Thumb           RequestFileData `json:"thumb,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
 }
 
-func (config PhotoConfig) method() string {
+func (config PhotoConfig) Method() string {
 	return "sendPhoto"
 }
 
@@ -3992,16 +3993,16 @@ func (config PhotoConfig) files() []RequestFile {
 // AudioConfig contains information about a SendAudio request.
 type AudioConfig struct {
 	BaseFile
-	Thumb           RequestFileData
-	Caption         string
-	ParseMode       string
-	CaptionEntities []MessageEntity
-	Duration        int
-	Performer       string
-	Title           string
+	Thumb           RequestFileData `json:"thumb,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
+	Duration        int             `json:"duration,omitempty"`
+	Performer       string          `json:"performer,omitempty"`
+	Title           string          `json:"title,omitempty"`
 }
 
-func (config AudioConfig) method() string {
+func (config AudioConfig) Method() string {
 	return "sendAudio"
 }
 
@@ -4024,14 +4025,14 @@ func (config AudioConfig) files() []RequestFile {
 // DocumentConfig contains information about a SendDocument request.
 type DocumentConfig struct {
 	BaseFile
-	Thumb                       RequestFileData
-	Caption                     string
-	ParseMode                   string
-	CaptionEntities             []MessageEntity
-	DisableContentTypeDetection bool
+	Thumb                       RequestFileData `json:"thumb,omitempty"`
+	Caption                     string          `json:"caption,omitempty"`
+	ParseMode                   string          `json:"parse_mode,omitempty"`
+	CaptionEntities             []MessageEntity `json:"caption_entities,omitempty"`
+	DisableContentTypeDetection bool            `json:"disable_content_type_detection,omitempty"`
 }
 
-func (config DocumentConfig) method() string {
+func (config DocumentConfig) Method() string {
 	return "sendDocument"
 }
 
@@ -4056,7 +4057,7 @@ type StickerConfig struct {
 	BaseFile
 }
 
-func (config StickerConfig) method() string {
+func (config StickerConfig) Method() string {
 	return "sendSticker"
 }
 
@@ -4070,15 +4071,15 @@ func (config StickerConfig) files() []RequestFile {
 // VideoConfig contains information about a SendVideo request.
 type VideoConfig struct {
 	BaseFile
-	Thumb             RequestFileData
-	Duration          int
-	Caption           string
-	ParseMode         string
-	CaptionEntities   []MessageEntity
-	SupportsStreaming bool
+	Thumb             RequestFileData `json:"thumb,omitempty"`
+	Duration          int             `json:"duration,omitempty"`
+	Caption           string          `json:"caption,omitempty"`
+	ParseMode         string          `json:"parse_mode,omitempty"`
+	CaptionEntities   []MessageEntity `json:"caption_entities,omitempty"`
+	SupportsStreaming bool            `json:"supports_streaming,omitempty"`
 }
 
-func (config VideoConfig) method() string {
+func (config VideoConfig) Method() string {
 	return "sendVideo"
 }
 
@@ -4101,14 +4102,14 @@ func (config VideoConfig) files() []RequestFile {
 // AnimationConfig contains information about a SendAnimation request.
 type AnimationConfig struct {
 	BaseFile
-	Duration        int
-	Thumb           RequestFileData
-	Caption         string
-	ParseMode       string
-	CaptionEntities []MessageEntity
+	Duration        int             `json:"duration,omitempty"`
+	Thumb           RequestFileData `json:"thumb,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
 }
 
-func (config AnimationConfig) method() string {
+func (config AnimationConfig) Method() string {
 	return "sendAnimation"
 }
 
@@ -4131,12 +4132,12 @@ func (config AnimationConfig) files() []RequestFile {
 // VideoNoteConfig contains information about a SendVideoNote request.
 type VideoNoteConfig struct {
 	BaseFile
-	Thumb    RequestFileData
-	Duration int
-	Length   int
+	Thumb    RequestFileData `json:"thumb,omitempty"`
+	Duration int             `json:"duration,omitempty"`
+	Length   int             `json:"length,omitempty"`
 }
 
-func (config VideoNoteConfig) method() string {
+func (config VideoNoteConfig) Method() string {
 	return "sendVideoNote"
 }
 
@@ -4159,14 +4160,14 @@ func (config VideoNoteConfig) files() []RequestFile {
 // VoiceConfig contains information about a SendVoice request.
 type VoiceConfig struct {
 	BaseFile
-	Thumb           RequestFileData
-	Caption         string
-	ParseMode       string
-	CaptionEntities []MessageEntity
-	Duration        int
+	Thumb           RequestFileData `json:"thumb,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
+	Duration        int             `json:"duration,omitempty"`
 }
 
-func (config VoiceConfig) method() string {
+func (config VoiceConfig) Method() string {
 	return "sendVoice"
 }
 
@@ -4189,29 +4190,29 @@ func (config VoiceConfig) files() []RequestFile {
 // LocationConfig contains information about a SendLocation request.
 type LocationConfig struct {
 	BaseChat
-	Latitude             float64 // required
-	Longitude            float64 // required
-	HorizontalAccuracy   float64 // optional
-	LivePeriod           int     // optional
-	Heading              int     // optional
-	ProximityAlertRadius int     // optional
+	Latitude             float64 `json:"latitude"`                         // required
+	Longitude            float64 `json:"longitude"`                        // required
+	HorizontalAccuracy   float64 `json:"horizontal_accuracy,omitempty"`    // optional
+	LivePeriod           int     `json:"live_period,omitempty"`            // optional
+	Heading              int     `json:"heading,omitempty"`                // optional
+	ProximityAlertRadius int     `json:"proximity_alert_radius,omitempty"` // optional
 }
 
-func (config LocationConfig) method() string {
+func (config LocationConfig) Method() string {
 	return "sendLocation"
 }
 
 // EditMessageLiveLocationConfig allows you to update a live location.
 type EditMessageLiveLocationConfig struct {
 	BaseEdit
-	Latitude             float64 // required
-	Longitude            float64 // required
-	HorizontalAccuracy   float64 // optional
-	Heading              int     // optional
-	ProximityAlertRadius int     // optional
+	Latitude             float64 `json:"latitude"`                         // required
+	Longitude            float64 `json:"longitude"`                        // required
+	HorizontalAccuracy   float64 `json:"horizontal_accuracy,omitempty"`    // optional
+	Heading              int     `json:"heading,omitempty"`                // optional
+	ProximityAlertRadius int     `json:"proximity_alert_radius,omitempty"` // optional
 }
 
-func (config EditMessageLiveLocationConfig) method() string {
+func (config EditMessageLiveLocationConfig) Method() string {
 	return "editMessageLiveLocation"
 }
 
@@ -4220,24 +4221,24 @@ type StopMessageLiveLocationConfig struct {
 	BaseEdit
 }
 
-func (config StopMessageLiveLocationConfig) method() string {
+func (config StopMessageLiveLocationConfig) Method() string {
 	return "stopMessageLiveLocation"
 }
 
 // VenueConfig contains information about a SendVenue request.
 type VenueConfig struct {
 	BaseChat
-	Latitude        float64 // required
-	Longitude       float64 // required
-	Title           string  // required
-	Address         string  // required
-	FoursquareID    string
-	FoursquareType  string
-	GooglePlaceID   string
-	GooglePlaceType string
+	Latitude        float64 `json:"latitude"`  // required
+	Longitude       float64 `json:"longitude"` // required
+	Title           string  `json:"title"`     // required
+	Address         string  `json:"address"`   // required
+	FoursquareID    string  `json:"foursquare_id,omitempty"`
+	FoursquareType  string  `json:"foursquare_type,omitempty"`
+	GooglePlaceID   string  `json:"google_place_id,omitempty"`
+	GooglePlaceType string  `json:"google_place_type,omitempty"`
 }
 
-func (config VenueConfig) method() string {
+func (config VenueConfig) Method() string {
 	return "sendVenue"
 }
 
@@ -4250,28 +4251,28 @@ type ContactConfig struct {
 	VCard       string
 }
 
-func (config ContactConfig) method() string {
+func (config ContactConfig) Method() string {
 	return "sendContact"
 }
 
 // SendPollConfig allows you to send a poll.
 type SendPollConfig struct {
 	BaseChat
-	Question              string
-	Options               []string
-	IsAnonymous           bool
-	Type                  string
-	AllowsMultipleAnswers bool
-	CorrectOptionID       int64
-	Explanation           string
-	ExplanationParseMode  string
-	ExplanationEntities   []MessageEntity
-	OpenPeriod            int
-	CloseDate             int
-	IsClosed              bool
+	Question              string          `json:"question"`     // required
+	Options               []string        `json:"options"`      // required
+	IsAnonymous           bool            `json:"is_anonymous"` // required
+	Type                  string          `json:"type"`         // required
+	AllowsMultipleAnswers bool            `json:"allows_multiple_answers"`
+	CorrectOptionID       int64           `json:"correct_option_id,omitempty"`
+	Explanation           string          `json:"explanation,omitempty"`
+	ExplanationParseMode  string          `json:"explanation_parse_mode,omitempty"`
+	ExplanationEntities   []MessageEntity `json:"explanation_entities,omitempty"`
+	OpenPeriod            int             `json:"open_period,omitempty"`
+	CloseDate             int             `json:"close_date,omitempty"`
+	IsClosed              bool            `json:"is_closed,omitempty"`
 }
 
-func (SendPollConfig) method() string {
+func (SendPollConfig) Method() string {
 	return "sendPoll"
 }
 
@@ -4281,36 +4282,36 @@ type GameConfig struct {
 	GameShortName string
 }
 
-func (config GameConfig) method() string {
+func (config GameConfig) Method() string {
 	return "sendGame"
 }
 
 // SetGameScoreConfig allows you to update the game score in a chat.
 type SetGameScoreConfig struct {
-	UserID             int64
-	Score              int
-	Force              bool
-	DisableEditMessage bool
-	ChatID             int64
-	ChannelUsername    string
-	MessageID          int
-	InlineMessageID    string
+	UserID             int64  `json:"user_id,omitempty"`              // required
+	Score              int    `json:"score,omitempty"`                // required
+	Force              bool   `json:"force,omitempty"`                // optional
+	DisableEditMessage bool   `json:"disable_edit_message,omitempty"` // optional
+	ChatID             int64  `json:"chat_id,omitempty"`
+	ChannelUsername    string `json:"channel_username,omitempty"`
+	MessageID          int    `json:"message_id,omitempty"`
+	InlineMessageID    string `json:"inline_message_id,omitempty"`
 }
 
-func (config SetGameScoreConfig) method() string {
+func (config SetGameScoreConfig) Method() string {
 	return "setGameScore"
 }
 
 // GetGameHighScoresConfig allows you to fetch the high scores for a game.
 type GetGameHighScoresConfig struct {
-	UserID          int64
-	ChatID          int64
-	ChannelUsername string
-	MessageID       int
-	InlineMessageID string
+	UserID          int64  `json:"user_id,omitempty"`
+	ChatID          int64  `json:"chat_id,omitempty"`
+	ChannelUsername string `json:"channel_username,omitempty"`
+	MessageID       int    `json:"message_id,omitempty"`
+	InlineMessageID string `json:"inline_message_id,omitempty"`
 }
 
-func (config GetGameHighScoresConfig) method() string {
+func (config GetGameHighScoresConfig) Method() string {
 	return "getGameHighScores"
 }
 
@@ -4320,32 +4321,32 @@ type ChatActionConfig struct {
 	Action string // required
 }
 
-func (config ChatActionConfig) method() string {
+func (config ChatActionConfig) Method() string {
 	return "sendChatAction"
 }
 
 // EditMessageTextConfig allows you to modify the text in a message.
 type EditMessageTextConfig struct {
 	BaseEdit
-	Text                  string
-	ParseMode             string
-	Entities              []MessageEntity
-	DisableWebPagePreview bool
+	Text                  string          `json:"text"`
+	ParseMode             string          `json:"parse_mode,omitempty"`
+	Entities              []MessageEntity `json:"entities,omitempty"`
+	DisableWebPagePreview bool            `json:"disable_web_page_preview,omitempty"`
 }
 
-func (config EditMessageTextConfig) method() string {
+func (config EditMessageTextConfig) Method() string {
 	return "editMessageText"
 }
 
 // EditMessageCaptionConfig allows you to modify the caption of a message.
 type EditMessageCaptionConfig struct {
 	BaseEdit
-	Caption         string
-	ParseMode       string
-	CaptionEntities []MessageEntity
+	Caption         string          `json:"caption,omitempty"`
+	ParseMode       string          `json:"parse_mode,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
 }
 
-func (config EditMessageCaptionConfig) method() string {
+func (config EditMessageCaptionConfig) Method() string {
 	return "editMessageCaption"
 }
 
@@ -4353,10 +4354,10 @@ func (config EditMessageCaptionConfig) method() string {
 type EditMessageMediaConfig struct {
 	BaseEdit
 
-	Media interface{}
+	Media interface{} `json:"media"`
 }
 
-func (EditMessageMediaConfig) method() string {
+func (EditMessageMediaConfig) Method() string {
 	return "editMessageMedia"
 }
 
@@ -4370,7 +4371,7 @@ type EditMessageReplyMarkupConfig struct {
 	BaseEdit
 }
 
-func (config EditMessageReplyMarkupConfig) method() string {
+func (config EditMessageReplyMarkupConfig) Method() string {
 	return "editMessageReplyMarkup"
 }
 
@@ -4379,28 +4380,28 @@ type StopPollConfig struct {
 	BaseEdit
 }
 
-func (StopPollConfig) method() string {
+func (StopPollConfig) Method() string {
 	return "stopPoll"
 }
 
 // UserProfilePhotosConfig contains information about a
 // GetUserProfilePhotos request.
 type UserProfilePhotosConfig struct {
-	UserID int64
-	Offset int
-	Limit  int
+	UserID int64 `json:"user_id"`
+	Offset int   `json:"offset"`
+	Limit  int   `json:"limit"`
 }
 
-func (UserProfilePhotosConfig) method() string {
+func (UserProfilePhotosConfig) Method() string {
 	return "getUserProfilePhotos"
 }
 
 // FileConfig has information about a file hosted on Telegram.
 type FileConfig struct {
-	FileID string
+	FileID string `json:"file_id"`
 }
 
-func (FileConfig) method() string {
+func (FileConfig) Method() string {
 	return "getFile"
 }
 
@@ -4414,27 +4415,27 @@ func (config FileConfig) params() (Params, error) {
 
 // UpdateConfig contains information about a GetUpdates request.
 type UpdateConfig struct {
-	Offset         int
-	Limit          int
-	Timeout        int
-	AllowedUpdates []string
+	Offset         int      `json:"offset,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+	Timeout        int      `json:"timeout,omitempty"`
+	AllowedUpdates []string `json:"allowed_updates,omitempty"`
 }
 
-func (UpdateConfig) method() string {
+func (UpdateConfig) Method() string {
 	return "getUpdates"
 }
 
 // WebhookConfig contains information about a SetWebhook request.
 type WebhookConfig struct {
-	URL                *url.URL
-	Certificate        RequestFileData
-	IPAddress          string
-	MaxConnections     int
-	AllowedUpdates     []string
-	DropPendingUpdates bool
+	URL                *url.URL        `json:"url"`
+	Certificate        RequestFileData `json:"certificate,omitempty"`
+	IPAddress          string          `json:"ip_address,omitempty"`
+	MaxConnections     int             `json:"max_connections,omitempty"`
+	AllowedUpdates     []string        `json:"allowed_updates,omitempty"`
+	DropPendingUpdates bool            `json:"drop_pending_updates,omitempty"`
 }
 
-func (config WebhookConfig) method() string {
+func (config WebhookConfig) Method() string {
 	return "setWebhook"
 }
 
@@ -4451,10 +4452,10 @@ func (config WebhookConfig) files() []RequestFile {
 
 // DeleteWebhookConfig is a helper to delete a webhook.
 type DeleteWebhookConfig struct {
-	DropPendingUpdates bool
+	DropPendingUpdates bool `json:"drop_pending_updates,omitempty"`
 }
 
-func (config DeleteWebhookConfig) method() string {
+func (config DeleteWebhookConfig) Method() string {
 	return "deleteWebhook"
 }
 
@@ -4469,7 +4470,7 @@ type InlineConfig struct {
 	SwitchPMParameter string        `json:"switch_pm_parameter"`
 }
 
-func (config InlineConfig) method() string {
+func (config InlineConfig) Method() string {
 	return "answerInlineQuery"
 }
 
@@ -4483,7 +4484,7 @@ type AnswerWebAppQueryConfig struct {
 	Result interface{} `json:"result"`
 }
 
-func (config AnswerWebAppQueryConfig) method() string {
+func (config AnswerWebAppQueryConfig) Method() string {
 	return "answerWebAppQuery"
 }
 
@@ -4496,7 +4497,7 @@ type CallbackConfig struct {
 	CacheTime       int    `json:"cache_time"`
 }
 
-func (config CallbackConfig) method() string {
+func (config CallbackConfig) Method() string {
 	return "answerCallbackQuery"
 }
 
@@ -4515,7 +4516,7 @@ type UnbanChatMemberConfig struct {
 	OnlyIfBanned bool
 }
 
-func (config UnbanChatMemberConfig) method() string {
+func (config UnbanChatMemberConfig) Method() string {
 	return "unbanChatMember"
 }
 
@@ -4526,7 +4527,7 @@ type BanChatMemberConfig struct {
 	RevokeMessages bool
 }
 
-func (config BanChatMemberConfig) method() string {
+func (config BanChatMemberConfig) Method() string {
 	return "banChatMember"
 }
 
@@ -4542,7 +4543,7 @@ type RestrictChatMemberConfig struct {
 	Permissions *ChatPermissions
 }
 
-func (config RestrictChatMemberConfig) method() string {
+func (config RestrictChatMemberConfig) Method() string {
 	return "restrictChatMember"
 }
 
@@ -4562,7 +4563,7 @@ type PromoteChatMemberConfig struct {
 	CanPromoteMembers   bool
 }
 
-func (config PromoteChatMemberConfig) method() string {
+func (config PromoteChatMemberConfig) Method() string {
 	return "promoteChatMember"
 }
 
@@ -4573,7 +4574,7 @@ type SetChatAdministratorCustomTitle struct {
 	CustomTitle string
 }
 
-func (SetChatAdministratorCustomTitle) method() string {
+func (SetChatAdministratorCustomTitle) Method() string {
 	return "setChatAdministratorCustomTitle"
 }
 
@@ -4589,7 +4590,7 @@ type BanChatSenderChatConfig struct {
 	UntilDate       int
 }
 
-func (config BanChatSenderChatConfig) method() string {
+func (config BanChatSenderChatConfig) Method() string {
 	return "banChatSenderChat"
 }
 
@@ -4602,7 +4603,7 @@ type UnbanChatSenderChatConfig struct {
 	SenderChatID    int64
 }
 
-func (config UnbanChatSenderChatConfig) method() string {
+func (config UnbanChatSenderChatConfig) Method() string {
 	return "unbanChatSenderChat"
 }
 
@@ -4617,7 +4618,7 @@ type ChatInfoConfig struct {
 	ChatConfig
 }
 
-func (ChatInfoConfig) method() string {
+func (ChatInfoConfig) Method() string {
 	return "getChat"
 }
 
@@ -4626,7 +4627,7 @@ type ChatMemberCountConfig struct {
 	ChatConfig
 }
 
-func (ChatMemberCountConfig) method() string {
+func (ChatMemberCountConfig) Method() string {
 	return "getChatMembersCount"
 }
 
@@ -4635,7 +4636,7 @@ type ChatAdministratorsConfig struct {
 	ChatConfig
 }
 
-func (ChatAdministratorsConfig) method() string {
+func (ChatAdministratorsConfig) Method() string {
 	return "getChatAdministrators"
 }
 
@@ -4647,7 +4648,7 @@ type SetChatPermissionsConfig struct {
 	Permissions *ChatPermissions
 }
 
-func (SetChatPermissionsConfig) method() string {
+func (SetChatPermissionsConfig) Method() string {
 	return "setChatPermissions"
 }
 
@@ -4658,7 +4659,7 @@ type ChatInviteLinkConfig struct {
 	ChatConfig
 }
 
-func (ChatInviteLinkConfig) method() string {
+func (ChatInviteLinkConfig) Method() string {
 	return "exportChatInviteLink"
 }
 
@@ -4674,7 +4675,7 @@ type CreateChatInviteLinkConfig struct {
 	CreatesJoinRequest bool
 }
 
-func (CreateChatInviteLinkConfig) method() string {
+func (CreateChatInviteLinkConfig) Method() string {
 	return "createChatInviteLink"
 }
 
@@ -4690,7 +4691,7 @@ type EditChatInviteLinkConfig struct {
 	CreatesJoinRequest bool
 }
 
-func (EditChatInviteLinkConfig) method() string {
+func (EditChatInviteLinkConfig) Method() string {
 	return "editChatInviteLink"
 }
 
@@ -4703,7 +4704,7 @@ type RevokeChatInviteLinkConfig struct {
 	InviteLink string
 }
 
-func (RevokeChatInviteLinkConfig) method() string {
+func (RevokeChatInviteLinkConfig) Method() string {
 	return "revokeChatInviteLink"
 }
 
@@ -4713,7 +4714,7 @@ type ApproveChatJoinRequestConfig struct {
 	UserID int64
 }
 
-func (ApproveChatJoinRequestConfig) method() string {
+func (ApproveChatJoinRequestConfig) Method() string {
 	return "approveChatJoinRequest"
 }
 
@@ -4723,7 +4724,7 @@ type DeclineChatJoinRequest struct {
 	UserID int64
 }
 
-func (DeclineChatJoinRequest) method() string {
+func (DeclineChatJoinRequest) Method() string {
 	return "declineChatJoinRequest"
 }
 
@@ -4733,7 +4734,7 @@ type LeaveChatConfig struct {
 	ChannelUsername string
 }
 
-func (config LeaveChatConfig) method() string {
+func (config LeaveChatConfig) Method() string {
 	return "leaveChat"
 }
 
@@ -4749,7 +4750,7 @@ type GetChatMemberConfig struct {
 	ChatConfigWithUser
 }
 
-func (GetChatMemberConfig) method() string {
+func (GetChatMemberConfig) Method() string {
 	return "getChatMember"
 }
 
@@ -4779,7 +4780,7 @@ type InvoiceConfig struct {
 	IsFlexible                bool
 }
 
-func (config InvoiceConfig) method() string {
+func (config InvoiceConfig) Method() string {
 	return "sendInvoice"
 }
 
@@ -4791,7 +4792,7 @@ type ShippingConfig struct {
 	ErrorMessage    string
 }
 
-func (config ShippingConfig) method() string {
+func (config ShippingConfig) Method() string {
 	return "answerShippingQuery"
 }
 
@@ -4802,7 +4803,7 @@ type PreCheckoutConfig struct {
 	ErrorMessage       string
 }
 
-func (config PreCheckoutConfig) method() string {
+func (config PreCheckoutConfig) Method() string {
 	return "answerPreCheckoutQuery"
 }
 
@@ -4813,7 +4814,7 @@ type DeleteMessageConfig struct {
 	MessageID       int
 }
 
-func (config DeleteMessageConfig) method() string {
+func (config DeleteMessageConfig) Method() string {
 	return "deleteMessage"
 }
 
@@ -4825,7 +4826,7 @@ type PinChatMessageConfig struct {
 	DisableNotification bool
 }
 
-func (config PinChatMessageConfig) method() string {
+func (config PinChatMessageConfig) Method() string {
 	return "pinChatMessage"
 }
 
@@ -4838,7 +4839,7 @@ type UnpinChatMessageConfig struct {
 	MessageID       int
 }
 
-func (config UnpinChatMessageConfig) method() string {
+func (config UnpinChatMessageConfig) Method() string {
 	return "unpinChatMessage"
 }
 
@@ -4849,7 +4850,7 @@ type UnpinAllChatMessagesConfig struct {
 	ChannelUsername string
 }
 
-func (config UnpinAllChatMessagesConfig) method() string {
+func (config UnpinAllChatMessagesConfig) Method() string {
 	return "unpinAllChatMessages"
 }
 
@@ -4858,7 +4859,7 @@ type SetChatPhotoConfig struct {
 	BaseFile
 }
 
-func (config SetChatPhotoConfig) method() string {
+func (config SetChatPhotoConfig) Method() string {
 	return "setChatPhoto"
 }
 
@@ -4875,7 +4876,7 @@ type DeleteChatPhotoConfig struct {
 	ChannelUsername string
 }
 
-func (config DeleteChatPhotoConfig) method() string {
+func (config DeleteChatPhotoConfig) Method() string {
 	return "deleteChatPhoto"
 }
 
@@ -4887,7 +4888,7 @@ type SetChatTitleConfig struct {
 	Title string
 }
 
-func (config SetChatTitleConfig) method() string {
+func (config SetChatTitleConfig) Method() string {
 	return "setChatTitle"
 }
 
@@ -4899,7 +4900,7 @@ type SetChatDescriptionConfig struct {
 	Description string
 }
 
-func (config SetChatDescriptionConfig) method() string {
+func (config SetChatDescriptionConfig) Method() string {
 	return "setChatDescription"
 }
 
@@ -4908,7 +4909,7 @@ type GetStickerSetConfig struct {
 	Name string
 }
 
-func (config GetStickerSetConfig) method() string {
+func (config GetStickerSetConfig) Method() string {
 	return "getStickerSet"
 }
 
@@ -4926,7 +4927,7 @@ type UploadStickerConfig struct {
 	PNGSticker RequestFileData
 }
 
-func (config UploadStickerConfig) method() string {
+func (config UploadStickerConfig) Method() string {
 	return "uploadStickerFile"
 }
 
@@ -4951,7 +4952,7 @@ type NewStickerSetConfig struct {
 	MaskPosition  *MaskPosition
 }
 
-func (config NewStickerSetConfig) method() string {
+func (config NewStickerSetConfig) Method() string {
 	return "createNewStickerSet"
 }
 
@@ -4979,7 +4980,7 @@ type AddStickerConfig struct {
 	MaskPosition *MaskPosition
 }
 
-func (config AddStickerConfig) method() string {
+func (config AddStickerConfig) Method() string {
 	return "addStickerToSet"
 }
 
@@ -5004,7 +5005,7 @@ type SetStickerPositionConfig struct {
 	Position int
 }
 
-func (config SetStickerPositionConfig) method() string {
+func (config SetStickerPositionConfig) Method() string {
 	return "setStickerPositionInSet"
 }
 
@@ -5013,7 +5014,7 @@ type DeleteStickerConfig struct {
 	Sticker string
 }
 
-func (config DeleteStickerConfig) method() string {
+func (config DeleteStickerConfig) Method() string {
 	return "deleteStickerFromSet"
 }
 
@@ -5032,7 +5033,7 @@ type SetStickerSetThumbConfig struct {
 	Thumb  RequestFileData
 }
 
-func (config SetStickerSetThumbConfig) method() string {
+func (config SetStickerSetThumbConfig) Method() string {
 	return "setStickerSetThumb"
 }
 
@@ -5051,7 +5052,7 @@ type SetChatStickerSetConfig struct {
 	StickerSetName string
 }
 
-func (config SetChatStickerSetConfig) method() string {
+func (config SetChatStickerSetConfig) Method() string {
 	return "setChatStickerSet"
 }
 
@@ -5061,7 +5062,7 @@ type DeleteChatStickerSetConfig struct {
 	SuperGroupUsername string
 }
 
-func (config DeleteChatStickerSetConfig) method() string {
+func (config DeleteChatStickerSetConfig) Method() string {
 	return "deleteChatStickerSet"
 }
 
@@ -5077,7 +5078,7 @@ type MediaGroupConfig struct {
 	ReplyToMessageID    int
 }
 
-func (config MediaGroupConfig) method() string {
+func (config MediaGroupConfig) Method() string {
 	return "sendMediaGroup"
 }
 
@@ -5093,10 +5094,10 @@ type DiceConfig struct {
 	// Dice can have values 1-6 for 🎲, 🎯, and 🎳, values 1-5 for 🏀 and ⚽,
 	// and values 1-64 for 🎰.
 	// Defaults to “🎲”
-	Emoji string
+	Emoji string `json:"emoji,omitempty"`
 }
 
-func (config DiceConfig) method() string {
+func (config DiceConfig) Method() string {
 	return "sendDice"
 }
 
@@ -5106,7 +5107,7 @@ type GetMyCommandsConfig struct {
 	LanguageCode string
 }
 
-func (config GetMyCommandsConfig) method() string {
+func (config GetMyCommandsConfig) Method() string {
 	return "getMyCommands"
 }
 
@@ -5117,7 +5118,7 @@ type SetMyCommandsConfig struct {
 	LanguageCode string
 }
 
-func (config SetMyCommandsConfig) method() string {
+func (config SetMyCommandsConfig) Method() string {
 	return "setMyCommands"
 }
 
@@ -5126,7 +5127,7 @@ type DeleteMyCommandsConfig struct {
 	LanguageCode string
 }
 
-func (config DeleteMyCommandsConfig) method() string {
+func (config DeleteMyCommandsConfig) Method() string {
 	return "deleteMyCommands"
 }
 
@@ -5139,7 +5140,7 @@ type SetChatMenuButtonConfig struct {
 	MenuButton *MenuButton
 }
 
-func (config SetChatMenuButtonConfig) method() string {
+func (config SetChatMenuButtonConfig) Method() string {
 	return "setChatMenuButton"
 }
 
@@ -5148,7 +5149,7 @@ type GetChatMenuButtonConfig struct {
 	ChannelUsername string
 }
 
-func (config GetChatMenuButtonConfig) method() string {
+func (config GetChatMenuButtonConfig) Method() string {
 	return "getChatMenuButton"
 }
 
@@ -5157,7 +5158,7 @@ type SetMyDefaultAdministratorRightsConfig struct {
 	ForChannels bool
 }
 
-func (config SetMyDefaultAdministratorRightsConfig) method() string {
+func (config SetMyDefaultAdministratorRightsConfig) Method() string {
 	return "setMyDefaultAdministratorRights"
 }
 
@@ -5165,7 +5166,7 @@ type GetMyDefaultAdministratorRightsConfig struct {
 	ForChannels bool
 }
 
-func (config GetMyDefaultAdministratorRightsConfig) method() string {
+func (config GetMyDefaultAdministratorRightsConfig) Method() string {
 	return "getMyDefaultAdministratorRights"
 }
 

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/url"
 	"os"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1995,4 +1997,47 @@ func DecodeUnicodeURL(encodedURL string) (string, error) {
 //	fmt.Println(encoded) // Output: https://example.com/path?q=%E4%BD%A0%E5%A5%BD
 func EncodeUnicodeURL(originalURL string) (string, error) {
 	return url.QueryEscape(originalURL), nil
+}
+
+// JSONToURLValues converts a JSON string to url.Values.
+//
+// Example:
+//
+//	jsonStr := `{"key1": "value1", "key2": ["value2", "value3"]}`
+//	values, err := JSONToURLValues(jsonStr)
+//	if err != nil {
+//		// handle error
+//	}
+//	fmt.Println(values.Encode()) // Output: key1=value1&key2=value2&key2=value3
+func JSONToURLValues(jsonStr string) (url.Values, error) {
+	var data map[string]interface{}
+	err := json.Unmarshal([]byte(jsonStr), &data)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to unmarshal JSON")
+	}
+
+	values := url.Values{}
+	for key, value := range data {
+		switch v := value.(type) {
+		case string:
+			values.Add(key, v)
+		case []interface{}:
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					values.Add(key, str)
+				}
+			}
+		case float64:
+			// Handle potential int64 overflow
+			if v > float64(math.MaxInt64) || v < float64(math.MinInt64) {
+				values.Add(key, strconv.FormatFloat(v, 'f', -1, 64))
+			} else {
+				values.Add(key, strconv.FormatInt(int64(v), 10))
+			}
+		default:
+			values.Add(key, fmt.Sprintf("%v", v))
+		}
+	}
+
+	return values, nil
 }

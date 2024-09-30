@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"reflect"
 	"sort"
 	"sync"
 	"testing"
@@ -1524,4 +1526,75 @@ func TestBindData(t *testing.T) {
 		err := x.BindData(result, data)
 		assert.Error(t, err)
 	})
+}
+
+func TestJSONToURLValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonStr  string
+		expected url.Values
+		wantErr  bool
+	}{
+		{
+			name:     "Valid JSON with string values",
+			jsonStr:  `{"key1": "value1", "key2": "value2"}`,
+			expected: url.Values{"key1": []string{"value1"}, "key2": []string{"value2"}},
+			wantErr:  false,
+		},
+		{
+			name:     "Valid JSON with array values",
+			jsonStr:  `{"key1": ["value1", "value2"], "key2": "value3"}`,
+			expected: url.Values{"key1": []string{"value1", "value2"}, "key2": []string{"value3"}},
+			wantErr:  false,
+		},
+		{
+			name:     "Valid JSON with mixed types",
+			jsonStr:  `{"key1": "value1", "key2": 42, "key3": true}`,
+			expected: url.Values{"key1": []string{"value1"}, "key2": []string{"42"}, "key3": []string{"true"}},
+			wantErr:  false,
+		},
+		{
+			name:     "Invalid JSON",
+			jsonStr:  `{"key1": "value1", "key2": }`,
+			expected: nil,
+			wantErr:  true,
+		},
+		{
+			name:     "Empty JSON",
+			jsonStr:  `{}`,
+			expected: url.Values{},
+			wantErr:  false,
+		},
+		{
+			name:     "JSON with large float64 value",
+			jsonStr:  `{"key": 1e20}`,
+			expected: url.Values{"key": []string{"100000000000000000000"}},
+			wantErr:  false,
+		},
+		{
+			name:     "JSON with nested objects",
+			jsonStr:  `{"key1": {"nested": "value"}, "key2": "value2"}`,
+			expected: url.Values{"key1": []string{"map[nested:value]"}, "key2": []string{"value2"}},
+			wantErr:  false,
+		},
+		{
+			name:     "JSON with int64 value",
+			jsonStr:  `{"key": 9223372036854775807}`,
+			expected: url.Values{"key": []string{"9223372036854775807"}},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := x.JSONToURLValues(tt.jsonStr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("JSONToURLValues() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("JSONToURLValues() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
 }

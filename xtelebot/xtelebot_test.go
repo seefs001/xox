@@ -55,7 +55,7 @@ func TestGetMe(t *testing.T) {
 	user, err := bot.GetMe(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
-	assert.Equal(t, 123, user.ID)
+	assert.Equal(t, int64(123), user.ID)
 	assert.True(t, user.IsBot)
 	assert.Equal(t, "TestBot", user.FirstName)
 	assert.Equal(t, "test_bot", user.UserName)
