@@ -411,28 +411,24 @@ func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 	return c.Request(ctx, http.MethodGet, url, nil)
 }
 
-// Post performs a POST request
-func (c *Client) Post(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	if err := c.validateClient(); err != nil {
-		return nil, err
-	}
-	return c.Request(ctx, http.MethodPost, url, body)
+// Post sends a POST request to the specified URL
+func (c *Client) Post(ctx context.Context, url string, body interface{}, options ...RequestOption) (*http.Response, error) {
+	return c.doRequestWithBody(ctx, http.MethodPost, url, body, options...)
 }
 
-// Put performs a PUT request
-func (c *Client) Put(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	if err := c.validateClient(); err != nil {
-		return nil, err
-	}
-	return c.Request(ctx, http.MethodPut, url, body)
+// PostForm sends a POST request with form data
+func (c *Client) PostForm(ctx context.Context, url string, data url.Values) (*http.Response, error) {
+	return c.Post(ctx, url, strings.NewReader(data.Encode()), WithContentType("application/x-www-form-urlencoded"))
 }
 
-// Patch performs a PATCH request
-func (c *Client) Patch(ctx context.Context, url string, body interface{}) (*http.Response, error) {
-	if err := c.validateClient(); err != nil {
-		return nil, err
-	}
-	return c.Request(ctx, http.MethodPatch, url, body)
+// Put sends a PUT request to the specified URL
+func (c *Client) Put(ctx context.Context, url string, body interface{}, options ...RequestOption) (*http.Response, error) {
+	return c.doRequestWithBody(ctx, http.MethodPut, url, body, options...)
+}
+
+// Patch sends a PATCH request to the specified URL
+func (c *Client) Patch(ctx context.Context, url string, body interface{}, options ...RequestOption) (*http.Response, error) {
+	return c.doRequestWithBody(ctx, http.MethodPatch, url, body, options...)
 }
 
 // Delete performs a DELETE request
@@ -454,12 +450,6 @@ func (c *Client) Head(url string) (resp *http.Response, err error) {
 	return c.Request(context.Background(), http.MethodHead, url, nil)
 }
 
-// PostForm issues a POST request to the specified URL, with data's keys and
-// values URL-encoded as the request body.
-func (c *Client) PostForm(url string, data url.Values) (resp *http.Response, err error) {
-	return c.Post(context.Background(), url, data)
-}
-
 // JSONBody represents a JSON request body
 type JSONBody map[string]interface{}
 
@@ -474,7 +464,7 @@ type BinaryData []byte
 
 // PostJSON sends a JSON-encoded POST request
 func (c *Client) PostJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
-	return c.requestWithJSON(ctx, http.MethodPost, url, body)
+	return c.Post(ctx, url, body, WithContentType("application/json"))
 }
 
 // PostFormData sends a multipart/form-data POST request
@@ -494,12 +484,12 @@ func (c *Client) PostBinary(ctx context.Context, url string, data BinaryData) (*
 
 // PutJSON sends a JSON-encoded PUT request
 func (c *Client) PutJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
-	return c.requestWithJSON(ctx, http.MethodPut, url, body)
+	return c.Put(ctx, url, body, WithContentType("application/json"))
 }
 
 // PatchJSON sends a JSON-encoded PATCH request
 func (c *Client) PatchJSON(ctx context.Context, url string, body JSONBody) (*http.Response, error) {
-	return c.requestWithJSON(ctx, http.MethodPatch, url, body)
+	return c.Patch(ctx, url, body, WithContentType("application/json"))
 }
 
 // PutFormData sends a multipart/form-data PUT request
@@ -1182,4 +1172,94 @@ func (c *Client) PostJSONAndDecode(ctx context.Context, url string, body JSONBod
 	}
 
 	return nil
+}
+
+// RequestOption represents an option for customizing requests
+type RequestOption func(*requestOptions)
+
+type requestOptions struct {
+	contentType string
+	headers     http.Header
+}
+
+// WithContentType sets the Content-Type header for the request
+func WithContentType(contentType string) RequestOption {
+	return func(opts *requestOptions) {
+		opts.contentType = contentType
+	}
+}
+
+// WithHeader adds a header to the request
+func WithHeader(key, value string) RequestOption {
+	return func(opts *requestOptions) {
+		if opts.headers == nil {
+			opts.headers = make(http.Header)
+		}
+		opts.headers.Add(key, value)
+	}
+}
+
+func (c *Client) doRequestWithBody(ctx context.Context, method, url string, body interface{}, options ...RequestOption) (*http.Response, error) {
+	if err := c.validateClient(); err != nil {
+		return nil, err
+	}
+
+	opts := &requestOptions{}
+	for _, option := range options {
+		option(opts)
+	}
+
+	var bodyReader io.Reader
+	var contentType string
+
+	switch v := body.(type) {
+	case nil:
+		// No body
+	case io.Reader:
+		bodyReader = v
+	case string:
+		bodyReader = strings.NewReader(v)
+	case []byte:
+		bodyReader = bytes.NewReader(v)
+	case JSONBody:
+		jsonData, err := json.Marshal(v)
+		if err != nil {
+			return nil, xerror.Wrap(err, "failed to marshal JSON body")
+		}
+		bodyReader = bytes.NewReader(jsonData)
+		contentType = "application/json"
+	default:
+		jsonData, err := json.Marshal(body)
+		if err != nil {
+			return nil, xerror.Wrap(err, "failed to marshal body")
+		}
+		bodyReader = bytes.NewReader(jsonData)
+		contentType = "application/json"
+	}
+
+	if opts.contentType != "" {
+		contentType = opts.contentType
+	}
+
+	fullURL := url
+	if !isAbsoluteURL(url) && c.baseURL != "" {
+		fullURL = c.baseURL + url
+	}
+
+	req, err := c.createRequest(ctx, method, fullURL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	for key, values := range opts.headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	return c.doRequest(req)
 }

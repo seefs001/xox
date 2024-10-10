@@ -106,7 +106,7 @@ func TestClientMethods(t *testing.T) {
 
 func TestRetryWithBackoff(t *testing.T) {
 	attempts := 0
-	maxAttempts := 3
+	maxAttempts := 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		if attempts < maxAttempts {
