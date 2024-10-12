@@ -126,10 +126,23 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	var err error
 	if len(a.Flags.Args()) > 0 {
-		if cmd, exists := a.Commands[a.Flags.Arg(0)]; exists {
-			err = a.runCommand(ctx, cmd, a.Flags.Args()[1:])
+		// Skip the first argument (program name)
+		cmdArgs := a.Flags.Args()[1:]
+		if len(cmdArgs) > 0 {
+			if cmd, exists := a.Commands[cmdArgs[0]]; exists {
+				err = a.runCommand(ctx, cmd, cmdArgs[1:])
+			} else {
+				err = fmt.Errorf("unknown command: %s", cmdArgs[0])
+			}
+		} else if a.DefaultRun != nil {
+			startTime := time.Now()
+			err = a.DefaultRun(ctx, a)
+			if debugMode {
+				xlog.Infof("App execution time: %v", time.Since(startTime))
+			}
 		} else {
-			err = fmt.Errorf("unknown command: %s", a.Flags.Arg(0))
+			// If no DefaultRun is set, print help
+			a.PrintHelp()
 		}
 	} else if a.DefaultRun != nil {
 		startTime := time.Now()
@@ -158,17 +171,23 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 // runCommand executes a command and its subcommands if any
 func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error {
+	// Parse flags for the current command
 	if cmd.Flags == nil {
 		cmd.Flags = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
 	}
 	if err := cmd.Flags.Parse(args); err != nil {
 		return err
 	}
+
+	// Check for subcommands recursively
 	if len(cmd.Flags.Args()) > 0 && cmd.SubCommands != nil {
-		if subCmd, exists := cmd.SubCommands[cmd.Flags.Arg(0)]; exists {
+		subCmdName := cmd.Flags.Arg(0)
+		if subCmd, exists := cmd.SubCommands[subCmdName]; exists {
 			return a.runCommand(ctx, subCmd, cmd.Flags.Args()[1:])
 		}
 	}
+
+	// Execute the command's Run function
 	return cmd.Run(ctx, cmd, cmd.Flags.Args())
 }
 
@@ -178,6 +197,19 @@ func (a *App) handleError(err error) error {
 		xlog.Errorf("Error: %v", err)
 		if a.ErrorHandler != nil {
 			a.ErrorHandler(err)
+		} else {
+			// Provide suggestions if the command is unknown
+			errMsg := err.Error()
+			if strings.HasPrefix(errMsg, "unknown command:") {
+				cmdName := strings.TrimSpace(strings.TrimPrefix(errMsg, "unknown command:"))
+				suggestions := a.suggestCommands(cmdName)
+				if len(suggestions) > 0 {
+					xcolor.Println(xcolor.Yellow, "\nDid you mean:")
+					for _, suggestion := range suggestions {
+						fmt.Printf("  %s\n", suggestion)
+					}
+				}
+			}
 		}
 	}
 	return err
@@ -268,4 +300,25 @@ func (a *App) PrintCommandHelp(cmdName string) {
 	} else {
 		fmt.Printf("Unknown command: %s\n", cmdName)
 	}
+}
+
+// Added method to support command suggestions
+func (a *App) suggestCommands(input string) []string {
+	// Collect all command names and aliases
+	var allCommands []string
+	for name, cmd := range a.Commands {
+		if !cmd.Hidden {
+			allCommands = append(allCommands, name)
+			allCommands = append(allCommands, cmd.Aliases...)
+		}
+	}
+
+	// Find commands that are close to the input
+	var suggestions []string
+	for _, name := range allCommands {
+		if strings.HasPrefix(name, input) {
+			suggestions = append(suggestions, name)
+		}
+	}
+	return suggestions
 }
