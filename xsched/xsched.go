@@ -2,7 +2,6 @@ package xsched
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,14 +18,11 @@ type Schedule interface {
 
 // Cron manages scheduled jobs
 type Cron struct {
-	jobs        []*jobEntry
-	stop        chan struct{}
-	add         chan *jobEntry
-	remove      chan string
-	running     bool
-	mutex       sync.RWMutex
-	location    *time.Location
-	tickInterval time.Duration // 新增字段
+	jobs         []*jobEntry
+	running      bool
+	mutex        sync.Mutex
+	location     *time.Location
+	tickInterval time.Duration
 }
 
 // jobEntry represents a scheduled job
@@ -41,25 +37,17 @@ type jobEntry struct {
 func New() *Cron {
 	return &Cron{
 		jobs:         make([]*jobEntry, 0),
-		add:          make(chan *jobEntry),
-		stop:         make(chan struct{}),
-		remove:       make(chan string),
-		running:      false,
 		location:     time.Local,
-		tickInterval: time.Second, // 默认1秒
+		tickInterval: time.Second,
 	}
 }
 
-// NewWithTickInterval creates a new Cron instance with custom tick interval
-func NewWithTickInterval(tick time.Duration) *Cron {
+// NewWithTickInterval creates a new Cron instance with a custom tick interval
+func NewWithTickInterval(interval time.Duration) *Cron {
 	return &Cron{
 		jobs:         make([]*jobEntry, 0),
-		add:          make(chan *jobEntry),
-		stop:         make(chan struct{}),
-		remove:       make(chan string),
-		running:      false,
 		location:     time.Local,
-		tickInterval: tick, // 自定义间隔
+		tickInterval: interval,
 	}
 }
 
@@ -83,11 +71,9 @@ func (c *Cron) addJob(schedule Schedule, cmd Job) string {
 		id:       fmt.Sprintf("%p", cmd),
 	}
 
-	if !c.running {
-		c.jobs = append(c.jobs, job)
-	} else {
-		c.add <- job
-	}
+	now := time.Now().In(c.location)
+	job.next = schedule.Next(now) // Initialize next execution time
+	c.jobs = append(c.jobs, job)
 
 	return job.id
 }
@@ -97,137 +83,82 @@ func (c *Cron) Remove(id string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.running {
-		c.remove <- id
-	} else {
-		c.removeJob(id)
+	for i, job := range c.jobs {
+		if job.id == id {
+			c.jobs = append(c.jobs[:i], c.jobs[i+1:]...)
+			break
+		}
 	}
 }
 
 // Start begins the cron scheduler
 func (c *Cron) Start() {
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
 	if c.running {
+		c.mutex.Unlock()
 		return
 	}
 	c.running = true
+	c.mutex.Unlock()
 	go c.run()
 }
 
 // run executes the main scheduling loop
 func (c *Cron) run() {
-	ticker := time.NewTicker(c.tickInterval)
-	defer ticker.Stop()
-
 	for {
-		select {
-		case now := <-ticker.C:
-			c.runJobs(now)
-		case <-c.stop:
-			return
-		case newJob := <-c.add:
-			c.insertJob(newJob)
-		case id := <-c.remove:
-			c.removeJob(id)
+		c.mutex.Lock()
+		if !c.running {
+			c.mutex.Unlock()
+			break
+		}
+
+		now := time.Now().In(c.location)
+		var duration time.Duration
+
+		if len(c.jobs) == 0 {
+			c.mutex.Unlock()
+			time.Sleep(c.tickInterval)
+			continue
+		}
+
+		// Find the next job to run
+		earliestTime := time.Time{}
+		for _, job := range c.jobs {
+			if earliestTime.IsZero() || job.next.Before(earliestTime) {
+				earliestTime = job.next
+			}
+		}
+
+		if earliestTime.After(now) {
+			duration = earliestTime.Sub(now)
+		} else {
+			duration = 0
+		}
+
+		c.mutex.Unlock()
+
+		if duration > 0 {
+			time.Sleep(duration)
+		} else {
+			// Run due jobs
+			c.mutex.Lock()
+			now = time.Now().In(c.location)
+			for _, job := range c.jobs {
+				if !job.next.After(now) {
+					go job.job()
+					job.next = job.schedule.Next(now)
+				}
+			}
+			c.mutex.Unlock()
 		}
 	}
-}
-
-// runJobs executes all jobs that are scheduled for the given time
-func (c *Cron) runJobs(now time.Time) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	for _, job := range c.jobs {
-		if now.After(job.next) || now.Equal(job.next) {
-			go job.job()
-			job.next = job.schedule.Next(job.next) // 修改这里：基于 job.next 更新下一次执行时间
-		}
-	}
-
-	// Re-sort jobs after updating next execution times
-	sort.Slice(c.jobs, func(i, j int) bool {
-		return c.jobs[i].next.Before(c.jobs[j].next)
-	})
-}
-
-// insertJob inserts a new job into the job list
-func (c *Cron) insertJob(job *jobEntry) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	now := time.Now().In(c.location)
-	job.next = job.schedule.Next(now)
-	c.jobs = append(c.jobs, job)
 }
 
 // Stop halts the cron scheduler
 func (c *Cron) Stop() {
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	if c.running {
-		c.stop <- struct{}{}
-		c.running = false
-	}
-}
-
-// removeJob removes a job from the cron by its ID
-func (c *Cron) removeJob(id string) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	var jobs []*jobEntry
-	for _, job := range c.jobs {
-		if job.id != id {
-			jobs = append(jobs, job)
-		}
-	}
-	c.jobs = jobs
-}
-
-// AddEverySecond adds a job to be executed every second
-func (c *Cron) AddEverySecond(cmd func()) (string, error) {
-	schedule := &everySecondSchedule{}
-	return c.addJob(schedule, Job(cmd)), nil
-}
-
-// everySecondSchedule implements the Schedule interface for every second execution
-type everySecondSchedule struct{}
-
-func (s *everySecondSchedule) Next(t time.Time) time.Time {
-	return t.Add(time.Second)
-}
-
-// AddEveryNSeconds adds a job to be executed every N seconds
-func (c *Cron) AddEveryNSeconds(n int, cmd func()) (string, error) {
-	return c.AddFunc(fmt.Sprintf("*/%d * * * * *", n), cmd)
-}
-
-// AddEveryMinute adds a job to be executed every minute
-func (c *Cron) AddEveryMinute(cmd func()) (string, error) {
-	return c.AddFunc("0 * * * * *", cmd)
-}
-
-// AddEveryHour adds a job to be executed every hour
-func (c *Cron) AddEveryHour(cmd func()) (string, error) {
-	return c.AddFunc("0 0 * * * *", cmd)
-}
-
-// AddEveryDay adds a job to be executed every day at midnight
-func (c *Cron) AddEveryDay(cmd func()) (string, error) {
-	return c.AddFunc("0 0 0 * * *", cmd)
-}
-
-// AddEveryWeek adds a job to be executed every week on Sunday at midnight
-func (c *Cron) AddEveryWeek(cmd func()) (string, error) {
-	return c.AddFunc("0 0 0 * * 0", cmd)
-}
-
-// AddEveryMonth adds a job to be executed every month on the first day at midnight
-func (c *Cron) AddEveryMonth(cmd func()) (string, error) {
-	return c.AddFunc("0 0 0 1 * *", cmd)
+	c.running = false
+	c.mutex.Unlock()
 }
 
 // parseSchedule parses a cron schedule specification
@@ -237,13 +168,32 @@ func parseSchedule(spec string) (Schedule, error) {
 		return nil, fmt.Errorf("invalid cron spec, expected 6 fields, got %d", len(fields))
 	}
 
-	schedule := &cronSchedule{
-		second:     parseField(fields[0], 0, 59),
-		minute:     parseField(fields[1], 0, 59),
-		hour:       parseField(fields[2], 0, 23),
-		dayOfMonth: parseField(fields[3], 1, 31),
-		month:      parseField(fields[4], 1, 12),
-		dayOfWeek:  parseField(fields[5], 0, 6),
+	schedule := &cronSchedule{}
+
+	var err error
+	schedule.second, err = parseField(fields[0], 0, 59)
+	if err != nil {
+		return nil, fmt.Errorf("invalid second field: %v", err)
+	}
+	schedule.minute, err = parseField(fields[1], 0, 59)
+	if err != nil {
+		return nil, fmt.Errorf("invalid minute field: %v", err)
+	}
+	schedule.hour, err = parseField(fields[2], 0, 23)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hour field: %v", err)
+	}
+	schedule.dayOfMonth, err = parseField(fields[3], 1, 31)
+	if err != nil {
+		return nil, fmt.Errorf("invalid day of month field: %v", err)
+	}
+	schedule.month, err = parseField(fields[4], 1, 12)
+	if err != nil {
+		return nil, fmt.Errorf("invalid month field: %v", err)
+	}
+	schedule.dayOfWeek, err = parseField(fields[5], 0, 6)
+	if err != nil {
+		return nil, fmt.Errorf("invalid day of week field: %v", err)
 	}
 
 	return schedule, nil
@@ -256,113 +206,170 @@ type cronSchedule struct {
 
 // Next returns the next activation time, later than the given time
 func (s *cronSchedule) Next(t time.Time) time.Time {
-	t = t.Add(time.Second)
-	year, month, day := t.Date()
-	hour, minute, second := t.Clock()
+	loc := t.Location()
+	t = t.Truncate(time.Second).Add(time.Second) // Round up to the next whole second
 
-	// Find the next matching second
-	second = s.nextValue(second, s.second)
-	if second == s.second[0] {
-		minute++
-	}
+	// Set an upper limit for searching to prevent infinite loops
+	endTime := t.Add(5 * 365 * 24 * time.Hour) // 5 years into the future
 
-	// Find the next matching minute
-	minute = s.nextValue(minute, s.minute)
-	if minute == s.minute[0] {
-		hour++
-	}
+	for t.Before(endTime) {
+		month, day := t.Month(), t.Day()
+		hour, min, sec := t.Clock()
 
-	// Find the next matching hour
-	hour = s.nextValue(hour, s.hour)
-	if hour == s.hour[0] {
-		day++
-	}
-
-	for {
-		// Check if the current day of the month and day of the week match
-		if s.dayMatches(year, month, day) {
-			return time.Date(year, month, day, hour, minute, second, 0, t.Location())
+		// Check if the current time satisfies the schedule
+		if s.matchField(s.month, int(month)) &&
+			s.matchField(s.dayOfMonth, day) &&
+			s.matchField(s.dayOfWeek, int(t.Weekday())) &&
+			s.matchField(s.hour, hour) &&
+			s.matchField(s.minute, min) &&
+			s.matchField(s.second, sec) {
+			return t.In(loc)
 		}
 
-		day++
-		if day > daysIn(month, year) {
-			day = 1
-			month++
-			if month > 12 {
-				month = 1
-				year++
-			}
-		}
-
-		hour = s.hour[0]
-		minute = s.minute[0]
-		second = s.second[0]
+		// Increment by one second
+		t = t.Add(time.Second)
 	}
+
+	// If no matching time is found within the limit
+	return time.Time{}
 }
 
-// dayMatches checks if the given date matches both the day-of-month and day-of-week constraints
-func (s *cronSchedule) dayMatches(year int, month time.Month, day int) bool {
-	t := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
-	return (len(s.dayOfMonth) == 0 || intSliceContains(s.dayOfMonth, day)) &&
-		(len(s.dayOfWeek) == 0 || intSliceContains(s.dayOfWeek, int(t.Weekday())))
-}
-
-// nextValue returns the next value in the given slice that's larger than the given value
-func (s *cronSchedule) nextValue(current int, values []int) int {
-	for _, v := range values {
-		if v > current {
-			return v
-		}
+// matchField checks if the value matches the field values
+func (s *cronSchedule) matchField(field []int, value int) bool {
+	if len(field) == 0 {
+		return true
 	}
-	return values[0]
-}
-
-// parseField parses a cron field into a slice of integers
-func parseField(field string, min, max int) []int {
-	var result []int
-	ranges := strings.Split(field, ",")
-	for _, r := range ranges {
-		if r == "*" {
-			for i := min; i <= max; i++ {
-				result = append(result, i)
-			}
-		} else if strings.Contains(r, "/") {
-			parts := strings.Split(r, "/")
-			step, _ := strconv.Atoi(parts[1])
-			start := min
-			if parts[0] != "*" {
-				start, _ = strconv.Atoi(parts[0])
-			}
-			for i := start; i <= max; i += step {
-				result = append(result, i)
-			}
-		} else if strings.Contains(r, "-") {
-			parts := strings.Split(r, "-")
-			start, _ := strconv.Atoi(parts[0])
-			end, _ := strconv.Atoi(parts[1])
-			for i := start; i <= end; i++ {
-				result = append(result, i)
-			}
-		} else {
-			val, _ := strconv.Atoi(r)
-			result = append(result, val)
-		}
-	}
-	sort.Ints(result)
-	return result
-}
-
-// daysIn returns the number of days in a month
-func daysIn(m time.Month, year int) int {
-	return time.Date(year, m+1, 0, 0, 0, 0, 0, time.UTC).Day()
-}
-
-// intSliceContains checks if a slice contains a specific integer
-func intSliceContains(slice []int, val int) bool {
-	for _, item := range slice {
-		if item == val {
+	for _, v := range field {
+		if v == value {
 			return true
 		}
 	}
 	return false
+}
+
+// parseField parses a cron field into a slice of integers
+func parseField(field string, min int, max int) ([]int, error) {
+	var result []int
+	if field == "*" {
+		for i := min; i <= max; i++ {
+			result = append(result, i)
+		}
+		return result, nil
+	} else if strings.Contains(field, "/") {
+		parts := strings.Split(field, "/")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid step expression in field: %s", field)
+		}
+		step, err := strconv.Atoi(parts[1])
+		if err != nil || step <= 0 {
+			return nil, fmt.Errorf("invalid step value in field: %s", field)
+		}
+		var rangeStart, rangeEnd int
+		if parts[0] == "*" {
+			rangeStart = min
+			rangeEnd = max
+		} else {
+			rangeParts := strings.Split(parts[0], "-")
+			if len(rangeParts) == 2 {
+				rangeStart, err = strconv.Atoi(rangeParts[0])
+				if err != nil {
+					return nil, fmt.Errorf("invalid range start in field: %s", field)
+				}
+				rangeEnd, err = strconv.Atoi(rangeParts[1])
+				if err != nil {
+					return nil, fmt.Errorf("invalid range end in field: %s", field)
+				}
+			} else {
+				rangeStart, err = strconv.Atoi(parts[0])
+				if err != nil {
+					return nil, fmt.Errorf("invalid range in field: %s", field)
+				}
+				rangeEnd = max
+			}
+		}
+		if rangeStart < min || rangeEnd > max {
+			return nil, fmt.Errorf("range outside valid bounds in field: %s", field)
+		}
+		for i := rangeStart; i <= rangeEnd; i += step {
+			result = append(result, i)
+		}
+	} else if strings.Contains(field, "-") {
+		rangeParts := strings.Split(field, "-")
+		if len(rangeParts) != 2 {
+			return nil, fmt.Errorf("invalid range expression in field: %s", field)
+		}
+		start, err := strconv.Atoi(rangeParts[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid range start in field: %s", field)
+		}
+		end, err := strconv.Atoi(rangeParts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid range end in field: %s", field)
+		}
+		if start < min || end > max {
+			return nil, fmt.Errorf("range outside valid bounds in field: %s", field)
+		}
+		if start > end {
+			return nil, fmt.Errorf("start greater than end in field: %s", field)
+		}
+		for i := start; i <= end; i++ {
+			result = append(result, i)
+		}
+	} else if strings.Contains(field, ",") {
+		parts := strings.Split(field, ",")
+		for _, part := range parts {
+			val, err := strconv.Atoi(part)
+			if err != nil || val < min || val > max {
+				return nil, fmt.Errorf("invalid value in field: %s", field)
+			}
+			result = append(result, val)
+		}
+	} else {
+		val, err := strconv.Atoi(field)
+		if err != nil || val < min || val > max {
+			return nil, fmt.Errorf("invalid value in field: %s", field)
+		}
+		result = append(result, val)
+	}
+
+	return result, nil
+}
+
+// AddEverySecond adds a job to be executed every second
+func (c *Cron) AddEverySecond(cmd func()) (string, error) {
+	return c.AddFunc("* * * * * *", cmd)
+}
+
+// AddEveryMinute adds a job to be executed every minute
+func (c *Cron) AddEveryMinute(cmd func()) (string, error) {
+	return c.AddFunc("0 * * * * *", cmd)
+}
+
+// AddEveryHour adds a job to be executed every hour
+func (c *Cron) AddEveryHour(cmd func()) (string, error) {
+	return c.AddFunc("0 0 * * * *", cmd)
+}
+
+// AddEveryDay adds a job to be executed every day
+func (c *Cron) AddEveryDay(cmd func()) (string, error) {
+	return c.AddFunc("0 0 0 * * *", cmd)
+}
+
+// AddEveryWeek adds a job to be executed every week (on Sunday)
+func (c *Cron) AddEveryWeek(cmd func()) (string, error) {
+	return c.AddFunc("0 0 0 * * 0", cmd)
+}
+
+// AddEveryMonth adds a job to be executed every month
+func (c *Cron) AddEveryMonth(cmd func()) (string, error) {
+	return c.AddFunc("0 0 0 1 * *", cmd)
+}
+
+// AddEveryNSeconds adds a job to be executed every N seconds
+func (c *Cron) AddEveryNSeconds(n int, cmd func()) (string, error) {
+	if n <= 0 || n > 59 {
+		return "", fmt.Errorf("invalid interval: %d", n)
+	}
+	spec := fmt.Sprintf("*/%d * * * * *", n)
+	return c.AddFunc(spec, cmd)
 }
