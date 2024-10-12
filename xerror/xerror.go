@@ -1,6 +1,7 @@
 package xerror
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -20,7 +21,45 @@ type Error struct {
 
 // Error returns the error message
 func (e *Error) Error() string {
-	return fmt.Sprintf("[%s] %s (Code: %d)", e.Timestamp.Format(time.RFC3339), e.Err.Error(), e.Code)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Error occurred at: %s\n", e.Timestamp.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("Error message: %s\n", e.Err.Error()))
+	sb.WriteString(fmt.Sprintf("Error code: %d\n", e.Code))
+	if len(e.Context) > 0 {
+		sb.WriteString("Context:\n")
+		for key, value := range e.Context {
+			sb.WriteString(fmt.Sprintf("  %s: %v\n", key, value))
+		}
+	}
+	sb.WriteString("Stack trace:\n")
+	sb.WriteString(e.Stack)
+	return sb.String()
+}
+
+// ToJSON converts the error to a JSON string
+// Usage: jsonStr, err := xerror.ToJSON(err)
+func (e *Error) ToJSON() (string, error) {
+	type jsonError struct {
+		Message   string                 `json:"message"`
+		Code      int                    `json:"code"`
+		Timestamp string                 `json:"timestamp"`
+		Stack     string                 `json:"stack"`
+		Context   map[string]interface{} `json:"context"`
+	}
+
+	jErr := jsonError{
+		Message:   e.Err.Error(),
+		Code:      e.Code,
+		Timestamp: e.Timestamp.Format(time.RFC3339),
+		Stack:     e.Stack,
+		Context:   e.Context,
+	}
+
+	jsonBytes, err := json.Marshal(jErr)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
 }
 
 // New creates a new Error with the given error message and captures the stack trace
