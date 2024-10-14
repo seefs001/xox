@@ -1,6 +1,8 @@
-> **WARNING**: This package is for personal use by seefs. Use at your own risk. The author takes no responsibility for any issues arising from its usage and will not provide support or bug fixes for external users.
+> [!WARNING]
+> This package is for personal use by seefs. Use at your own risk. The author takes no responsibility for any issues arising from its usage and will not provide support or bug fixes for external users.
 
-> ⚠️ **CAUTION**: By using this package, you acknowledge that you are doing so at your own risk and without any expectation of support or maintenance from the author.
+> [!CAUTION]
+> By using this package, you acknowledge that you are doing so at your own risk and without any expectation of support or maintenance from the author.
 
 # xox 🧰
 
