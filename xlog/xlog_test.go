@@ -146,11 +146,14 @@ func TestShutdown(t *testing.T) {
 
 	xlog.Info("Test message before shutdown")
 
-	// Wait for logs to be written
-	time.Sleep(time.Second)
+	// Wait for logs to be written and flushed
+	time.Sleep(2 * time.Second)
 
 	err = xlog.Shutdown()
 	assert.NoError(err, "Shutdown should not return an error")
+
+	// Wait a bit more after shutdown
+	time.Sleep(time.Second)
 
 	// Verify that logs were written
 	files, err := filepath.Glob(filepath.Join(tempDir, "*.log*"))
@@ -170,6 +173,10 @@ func TestShutdown(t *testing.T) {
 	fixedContent, err := os.ReadFile(fixedFilename)
 	assert.NoError(err, "Error reading fixed log file")
 	assert.Contains(string(fixedContent), "Test message before shutdown", "Fixed log should contain test message")
+
+	// Print debug information
+	t.Logf("Fixed log file content: %s", string(fixedContent))
+	t.Logf("All log files: %v", files)
 }
 
 func TestCatch(t *testing.T) {
