@@ -25,7 +25,8 @@ go get github.com/seefs001/xox/xsb
 ```go
 import "github.com/seefs001/xox/xsb"
 
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users").
     Columns("id", "name", "email").
     Where("age > ?", 18).
@@ -40,7 +41,8 @@ query, args := builder.Build()
 ### Insert Query
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users").
     Columns("name", "email").
     Values("John Doe", "john@example.com")
@@ -53,7 +55,8 @@ query, args := builder.BuildInsert()
 ### Update Query
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users").
     Set("name", "Jane Doe").
     Where("id = ?", 1)
@@ -66,7 +69,8 @@ query, args := builder.BuildUpdate()
 ### Delete Query
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users").
     Where("id = ?", 1)
 
@@ -78,7 +82,8 @@ query, args := builder.BuildDelete()
 ### Joins
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users u").
     Columns("u.id", "u.name", "o.order_id").
     InnerJoin("orders o", "u.id = o.user_id").
@@ -92,15 +97,17 @@ query, args := builder.Build()
 ### Subqueries
 
 ```go
-subquery := xsb.New[any]().
+subquery := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("orders").
     Columns("user_id", "COUNT(*) as order_count").
     GroupBy("user_id")
 
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users u").
     Columns("u.id", "u.name", "o.order_count").
-    LeftJoin(subquery.BuildSQL(), "o ON u.id = o.user_id")
+    LeftJoin(xsb.New().Subquery(subquery, "o"), "u.id = o.user_id")
 
 query, args := builder.Build()
 // query: SELECT u.id, u.name, o.order_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) as order_count FROM orders GROUP BY user_id) AS o ON u.id = o.user_id
@@ -115,13 +122,14 @@ if err != nil {
     // Handle error
 }
 
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     WithTransaction(tx).
     Table("users").
     Set("status", "active").
     Where("id = ?", 1)
 
-_, err = builder.Exec(db)
+_, err = builder.Exec()
 if err != nil {
     tx.Rollback()
     // Handle error
@@ -136,89 +144,82 @@ if err != nil {
 ### Debugging
 
 ```go
-builder := xsb.New[any]().
-    EnableDebug().
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
     Table("users").
     Columns("id", "name").
-    Where("id = ?", 1)
+    Where("id = ?", 1).
+    Explain()
 
-debugInfo := builder.Debug()
-fmt.Println(debugInfo)
-// Output: Query Type: SELECT
-//         Query: SELECT id, name FROM users WHERE id = ?
-//         Args: [1]
+query, args := builder.Build()
+// query: EXPLAIN SELECT id, name FROM users WHERE id = ?
+// args: [1]
 ```
 
 ## API Reference
 
-### New[T any]() *Builder[T]
-Creates a new Builder instance with PostgreSQL as the default dialect.
+### New() *Builder
+Creates a new Builder instance with MySQL as the default dialect.
 
-### WithDialect(dialect Dialect) *Builder[T]
+### WithDialect(dialect Dialect) *Builder
 Sets a specific dialect for the builder.
 
-### Table(name string) *Builder[T]
+### Table(name string) *Builder
 Sets the table name for the query.
 
-### Columns(cols ...string) *Builder[T]
+### Columns(cols ...string) *Builder
 Sets the columns for the query.
 
-### Values(values ...interface{}) *Builder[T]
+### Values(values ...interface{}) *Builder
 Sets the values for an INSERT query.
 
-### Where(condition string, args ...interface{}) *Builder[T]
+### Where(condition string, args ...interface{}) *Builder
 Adds a WHERE clause to the query.
 
-### OrWhere(condition string, args ...interface{}) *Builder[T]
+### OrWhere(condition string, args ...interface{}) *Builder
 Adds an OR condition to the WHERE clause.
 
-### WhereIn(column string, values ...interface{}) *Builder[T]
+### WhereIn(column string, values ...interface{}) *Builder
 Adds a WHERE IN clause.
 
-### OrderBy(clause string) *Builder[T]
+### OrderBy(clause string) *Builder
 Adds an ORDER BY clause to the query.
 
-### Limit(limit int) *Builder[T]
+### Limit(limit int) *Builder
 Adds a LIMIT clause to the query.
 
-### Offset(offset int) *Builder[T]
+### Offset(offset int) *Builder
 Adds an OFFSET clause to the query.
 
-### Join(joinType, table, condition string) *Builder[T]
+### Join(joinType, table, condition string) *Builder
 Adds a JOIN clause to the query.
 
-### InnerJoin(table, condition string) *Builder[T]
+### InnerJoin(table, condition string) *Builder
 Adds an INNER JOIN clause.
 
-### LeftJoin(table, condition string) *Builder[T]
+### LeftJoin(table, condition string) *Builder
 Adds a LEFT JOIN clause.
 
-### RightJoin(table, condition string) *Builder[T]
+### RightJoin(table, condition string) *Builder
 Adds a RIGHT JOIN clause.
 
-### GroupBy(clause string) *Builder[T]
+### GroupBy(clause string) *Builder
 Adds a GROUP BY clause to the query.
 
-### Having(condition string, args ...interface{}) *Builder[T]
+### Having(condition string, args ...interface{}) *Builder
 Adds a HAVING clause to the query.
 
-### Set(column string, value interface{}) *Builder[T]
+### Set(column string, value interface{}) *Builder
 Adds a column-value pair for UPDATE queries.
 
-### Returning(columns ...string) *Builder[T]
-Adds a RETURNING clause (for PostgreSQL).
-
-### Union(other *Builder[T]) *Builder[T]
+### Union(other *Builder) *Builder
 Adds a UNION clause.
 
-### CTE(name string, subquery *Builder[T]) *Builder[T]
+### CTE(name string, subquery *Builder) *Builder
 Adds a Common Table Expression (WITH clause).
 
-### Distinct() *Builder[T]
-Adds DISTINCT to the SELECT query.
-
-### Lock() *Builder[T]
-Adds FOR UPDATE to the SELECT query.
+### Lock() *Builder
+Adds FOR UPDATE to the SELECT query (for supported dialects).
 
 ### Build() (string, []interface{})
 Builds the final query string and returns it along with the arguments.
@@ -232,23 +233,20 @@ Builds an UPDATE query.
 ### BuildDelete() (string, []interface{})
 Builds a DELETE query.
 
-### Exec(db *sql.DB) (sql.Result, error)
+### Exec() (sql.Result, error)
 Executes the query and returns the result.
 
-### QueryRow(db *sql.DB) *sql.Row
+### QueryRow() *sql.Row
 Executes the query and returns a single row.
 
-### Query(db *sql.DB) (*sql.Rows, error)
+### Query() (*sql.Rows, error)
 Executes the query and returns multiple rows.
 
-### WithTransaction(tx *sql.Tx) *Builder[T]
+### WithTransaction(tx *sql.Tx) *Builder
 Wraps the builder with a transaction.
 
-### EnableDebug() *Builder[T]
-Turns on debug mode.
-
-### Debug() string
-Returns a string representation of the query for debugging purposes.
+### Explain() *Builder
+Adds EXPLAIN to the query for debugging purposes.
 
 ### Sanitize(input string) string
 Removes any potentially harmful SQL from the input.
@@ -258,32 +256,32 @@ Removes any potentially harmful SQL from the input.
 ### Upsert (PostgreSQL)
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
     WithDialect(xsb.PostgreSQL).
     Table("users").
     Columns("id", "name", "email").
     Values(1, "John Doe", "john@example.com").
-    Upsert([]string{"id"}, map[string]interface{}{
-        "name": "John Doe Updated",
-        "email": "john_updated@example.com",
+    Upsert([]string{"id"}, []xsb.UpdateClause{
+        {Column: "name", Value: "John Doe Updated"},
+        {Column: "email", Value: "john_updated@example.com"},
     })
 
 query, args := builder.BuildInsert()
-// query: INSERT INTO users (id, name, email) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = ?, email = ?
+// query: INSERT INTO users (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $4, email = $5 RETURNING id
 // args: [1, "John Doe", "john@example.com", "John Doe Updated", "john_updated@example.com"]
 ```
 
 ### On Duplicate Key Update (MySQL)
 
 ```go
-builder := xsb.New[any]().
+builder := xsb.New().
     WithDialect(xsb.MySQL).
     Table("users").
     Columns("id", "name", "email").
     Values(1, "John Doe", "john@example.com").
-    OnDuplicateKeyUpdate(map[string]interface{}{
-        "name": "John Doe Updated",
-        "email": "john_updated@example.com",
+    OnDuplicateKeyUpdate([]xsb.UpdateClause{
+        {Column: "name", Value: "John Doe Updated"},
+        {Column: "email", Value: "john_updated@example.com"},
     })
 
 query, args := builder.BuildInsert()
@@ -294,21 +292,24 @@ query, args := builder.BuildInsert()
 ### Recursive CTE
 
 ```go
-cte := xsb.New[any]().
+cte := xsb.New().
+    WithDialect(xsb.PostgreSQL).
     Table("employees").
     Columns("id", "name", "manager_id").
-    UnionAll(xsb.New[any]().
+    Union(xsb.New().
+        WithDialect(xsb.PostgreSQL).
         Table("employees e").
         InnerJoin("cte c", "e.manager_id = c.id").
         Columns("e.id", "e.name", "e.manager_id"))
 
-builder := xsb.New[any]().
+builder := xsb.New().
+    WithDialect(xsb.PostgreSQL).
     WithRecursive("cte", cte).
     Table("cte").
     Columns("id", "name", "manager_id").
     Where("id = ?", 1)
 
 query, args := builder.Build()
-// query: WITH RECURSIVE cte AS (SELECT id, name, manager_id FROM employees UNION ALL SELECT e.id, e.name, e.manager_id FROM employees e INNER JOIN cte c ON e.manager_id = c.id) SELECT id, name, manager_id FROM cte WHERE id = ?
+// query: WITH RECURSIVE cte AS (SELECT id, name, manager_id FROM employees UNION SELECT e.id, e.name, e.manager_id FROM employees e INNER JOIN cte c ON e.manager_id = c.id) SELECT id, name, manager_id FROM cte WHERE id = ?
 // args: [1]
 ```
