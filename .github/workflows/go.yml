@@ -27,5 +27,5 @@ jobs:
       timeout-minutes: 5  # set timeout to 5 minutes
 
     - name: Test
-      run: go test -v ./...
+      run: go test -race -v ./...
       timeout-minutes: 3  # set timeout to 3 minutes
