@@ -284,7 +284,7 @@ func TestListServicesWithNamed(t *testing.T) {
 	}
 }
 
-// TestRemoveNamedService tests removing a named service
+// TestRemoveNamedService tests removing a named service and ensuring it cannot be invoked afterward.
 func TestRemoveNamedService(t *testing.T) {
 	c := xd.NewContainer()
 
@@ -302,7 +302,7 @@ func TestRemoveNamedService(t *testing.T) {
 	assert.NotNil(t, devConfig, "Expected service to exist")
 
 	// Remove the named service
-	c.RemoveNamedService(reflect.TypeOf((*Config)(nil)).Elem(), "dev")
+	c.RemoveNamedService(reflect.TypeOf((*Config)(nil)), "dev")
 
 	// Try to invoke the removed service
 	_, err = xd.InvokeNamed[*Config](c, "dev")

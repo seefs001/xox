@@ -173,17 +173,35 @@ func TestCronWithCustomTickInterval(t *testing.T) {
 	c := NewWithTickInterval(50 * time.Millisecond)
 	assert.Equal(t, 50*time.Millisecond, c.tickInterval, "Custom tick interval should be set correctly")
 
+	var mu sync.Mutex
 	executed := false
+	executedChan := make(chan struct{})
+
 	id, err := c.AddFunc("* * * * * *", func() {
-		executed = true
+		mu.Lock()
+		defer mu.Unlock()
+		if !executed {
+			executed = true
+			close(executedChan)
+		}
 	})
 	require.NoError(t, err)
 
 	c.Start()
-	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-executedChan:
+		// Job executed successfully
+	case <-time.After(1100 * time.Millisecond):
+		t.Fatal("Job should have been executed within the timeout period")
+	}
+
 	c.Stop()
 
+	mu.Lock()
 	assert.True(t, executed, "Job should have been executed with custom tick interval")
+	mu.Unlock()
+
 	c.Remove(id)
 }
 
@@ -209,8 +227,9 @@ func TestConcurrentJobExecution(t *testing.T) {
 	count := 0
 
 	jobCount := 5
-	executionDuration := 300 * time.Millisecond
+	executionDuration := 1100 * time.Millisecond // Increased duration to allow job execution
 
+	wg.Add(jobCount)
 	for i := 0; i < jobCount; i++ {
 		_, err := c.AddFunc("* * * * * *", func() {
 			mu.Lock()
@@ -221,7 +240,6 @@ func TestConcurrentJobExecution(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	wg.Add(jobCount)
 	c.Start()
 
 	done := make(chan struct{})
@@ -286,34 +304,71 @@ func TestInvalidScheduleSpecs(t *testing.T) {
 }
 
 func TestJobExecutionOrder(t *testing.T) {
-	c := NewWithTickInterval(100 * time.Millisecond)
+	c := NewWithTickInterval(50 * time.Millisecond)
 	var mu sync.Mutex
-	var executionOrder []int
+	jobExecutionCount := make(map[int]int)
 
-	for i := 1; i <= 3; i++ {
-		i := i // Capture loop variable
-		_, err := c.AddFunc(fmt.Sprintf("*/%d * * * * *", i), func() {
+	// Define expected executions for each job
+	expectedExecutions := map[int]int{
+		1: 4, // every 1 second
+		2: 2, // every 2 seconds
+		3: 1, // every 3 seconds
+	}
+
+	// Calculate total executions needed
+	totalExecutions := 0
+	for _, count := range expectedExecutions {
+		totalExecutions += count
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(totalExecutions)
+
+	// Add jobs with different schedules
+	for jobID := range expectedExecutions {
+		jobID := jobID
+		_, err := c.AddFunc(fmt.Sprintf("*/%d * * * * *", jobID), func() {
 			mu.Lock()
-			executionOrder = append(executionOrder, i)
+			jobExecutionCount[jobID]++
 			mu.Unlock()
+			wg.Done()
 		})
 		require.NoError(t, err)
 	}
 
 	c.Start()
-	time.Sleep(1100 * time.Millisecond) // Run for just over 1 second
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Wait for all expected executions or timeout
+	select {
+	case <-done:
+		// All expected executions completed
+	case <-time.After(5 * time.Second): // Increased timeout to allow all executions
+		t.Fatal("Test timed out waiting for job executions")
+	}
+
 	c.Stop()
 
-	expected := []int{1, 2, 3, 1}
-	assert.Equal(t, expected, executionOrder, "Jobs should execute in the correct order")
+	// Verify each job executed as expected
+	for jobID, expected := range expectedExecutions {
+		mu.Lock()
+		count := jobExecutionCount[jobID]
+		mu.Unlock()
+		assert.Equal(t, expected, count, fmt.Sprintf("Job %d should have executed %d times, got %d", jobID, expected, count))
+	}
 }
 
 func TestCronStartStop(t *testing.T) {
 	c := NewWithTickInterval(50 * time.Millisecond)
 
-	executed := false
+	executed := make(chan bool, 1)
 	_, err := c.AddFunc("* * * * * *", func() {
-		executed = true
+		executed <- true
 	})
 	require.NoError(t, err)
 
@@ -322,19 +377,22 @@ func TestCronStartStop(t *testing.T) {
 	assert.True(t, c.running, "Cron should be running after Start")
 
 	// Wait for the job to execute
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-executed:
+		// Job executed successfully
+	case <-time.After(1100 * time.Millisecond): // Increased timeout to allow for job execution
+		t.Fatal("Job should have been executed")
+	}
 
 	// Stop the cron
 	c.Stop()
 	assert.False(t, c.running, "Cron should not be running after Stop")
 
-	// Check if the job was executed
-	assert.True(t, executed, "Job should have been executed")
-
-	// Reset the executed flag
-	executed = false
-
-	// Wait to ensure the job doesn't execute after stopping
-	time.Sleep(100 * time.Millisecond)
-	assert.False(t, executed, "Job should not execute after Stop")
+	// Ensure no further executions occur after stopping
+	select {
+	case <-executed:
+		t.Fatal("Job should not execute after Stop")
+	case <-time.After(200 * time.Millisecond):
+		// No execution as expected
+	}
 }

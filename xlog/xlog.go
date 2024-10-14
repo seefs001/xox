@@ -322,6 +322,10 @@ type RotatingFileHandler struct {
 	logChan     chan slog.Record
 	done        chan struct{}
 	writeCount  int
+	closed      bool
+	closeMu     sync.Mutex
+	rotateSize  int64
+	currentNum  int
 }
 
 // NewRotatingFileHandler creates a new RotatingFileHandler.
@@ -336,12 +340,19 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 		lastRotate: time.Now(),
 		logChan:    make(chan slog.Record, 1000),
 		done:       make(chan struct{}),
+		rotateSize: config.MaxSize / 2, // Set initial rotate size to half of MaxSize
+		currentNum: 1,
 	}
 
 	if err := h.rotate(); err != nil {
 		return nil, xerror.Wrap(err, "failed to rotate log file")
 	}
 
+	h.Handler = slog.NewJSONHandler(h.file, &slog.HandlerOptions{
+		Level: config.Level,
+	})
+
+	h.buffer = bufio.NewWriter(h.file)
 	h.flushTicker = time.NewTicker(time.Second)
 
 	go h.run()
@@ -354,7 +365,13 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.shouldRotate() {
+	if h.file == nil {
+		if err := h.rotate(); err != nil {
+			return err
+		}
+	}
+
+	if h.size >= h.rotateSize {
 		if err := h.rotate(); err != nil {
 			return err
 		}
@@ -370,7 +387,6 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 		h.size += int64(len(a.Key) + len(a.Value.String()))
 		return true
 	})
-	h.writeCount++
 
 	return nil
 }
@@ -381,8 +397,9 @@ func (h *RotatingFileHandler) run() {
 		select {
 		case <-h.flushTicker.C:
 			h.mu.Lock()
-			h.buffer.Flush()
-			h.updateFileSize()
+			if h.buffer != nil {
+				h.buffer.Flush()
+			}
 			h.mu.Unlock()
 		case <-h.done:
 			return
@@ -412,28 +429,27 @@ func (h *RotatingFileHandler) updateFileSize() {
 // rotate rotates the log file.
 func (h *RotatingFileHandler) rotate() error {
 	if h.file != nil {
-		h.buffer.Flush()
 		h.file.Close()
 	}
 
-	now := time.Now()
-	newFilename := fmt.Sprintf("%s-%s", now.Format("2006-01-02-15-04-05"), filepath.Base(h.config.Filename))
-	newFilePath := filepath.Join(filepath.Dir(h.config.Filename), newFilename)
+	dir := filepath.Dir(h.config.Filename)
+	ext := filepath.Ext(h.config.Filename)
+	base := filepath.Base(h.config.Filename)
+	base = strings.TrimSuffix(base, ext)
 
-	// Open new file
-	file, err := os.OpenFile(newFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	filename := fmt.Sprintf("%s.%d%s", base, h.currentNum, ext)
+	fullPath := filepath.Join(dir, filename)
+
+	newFile, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return xerror.Wrap(err, "failed to open new log file")
 	}
 
-	h.file = file
+	h.file = newFile
 	h.size = 0
-	h.lastRotate = now
-	h.writeCount = 0
-	h.buffer = bufio.NewWriter(h.file)
-	h.Handler = slog.NewJSONHandler(h.buffer, &slog.HandlerOptions{Level: h.config.Level, AddSource: true})
+	h.rotateSize = h.config.MaxSize
+	h.currentNum++
 
-	// Remove old files
 	h.removeOldFiles()
 
 	return nil
@@ -459,17 +475,29 @@ func (h *RotatingFileHandler) removeOldFiles() {
 
 // Close closes the RotatingFileHandler.
 func (h *RotatingFileHandler) Close() error {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
+
+	if h.closed {
+		return nil
+	}
+
 	close(h.done)
-	close(h.logChan)
 	h.flushTicker.Stop()
+	h.closed = true
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if err := h.buffer.Flush(); err != nil {
-		return xerror.Wrap(err, "failed to flush buffer")
+	if h.buffer != nil {
+		if err := h.buffer.Flush(); err != nil {
+			return xerror.Wrap(err, "failed to flush buffer")
+		}
 	}
-	return h.file.Close()
+	if h.file != nil {
+		return h.file.Close()
+	}
+	return nil
 }
 
 // AddRotatingFile adds a rotating file handler to the logger
@@ -510,22 +538,14 @@ type ShutdownHandler interface {
 func Shutdown() error {
 	var errs []error
 	for _, handler := range handlers {
-		if sh, ok := handler.(interface{ Close() error }); ok {
-			if err := sh.Close(); err != nil {
-				errs = append(errs, xerror.Wrap(err, "failed to close handler"))
+		if closer, ok := handler.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close handler: %w", err))
 			}
 		}
 	}
-
-	// Close the default handler if it's a RotatingFileHandler or FixedFileHandler
-	if h, ok := defaultHandler.(interface{ Close() error }); ok {
-		if err := h.Close(); err != nil {
-			errs = append(errs, xerror.Wrap(err, "failed to close default handler"))
-		}
-	}
-
 	if len(errs) > 0 {
-		return xerror.Wrap(errs[0], "failed to shutdown one or more handlers")
+		return xerror.Errorf("failed to shutdown one or more handlers: %v", errs)
 	}
 	return nil
 }
@@ -609,4 +629,11 @@ func AddFixedFile(filename string, level slog.Level) error {
 	defaultHandler = newHandler
 	defaultLogger = slog.New(defaultHandler)
 	return nil
+}
+
+// Rotate forces a rotation of the current log file.
+func (h *RotatingFileHandler) Rotate() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rotate()
 }

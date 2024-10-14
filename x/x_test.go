@@ -461,8 +461,11 @@ func TestParallelMap(t *testing.T) {
 }
 
 func TestDebounce(t *testing.T) {
+	var mu sync.Mutex
 	counter := 0
 	f := func() {
+		mu.Lock()
+		defer mu.Unlock()
 		counter++
 	}
 
@@ -474,6 +477,8 @@ func TestDebounce(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	assert.Equal(t, 1, counter)
 }
 
@@ -755,16 +760,19 @@ func TestSafeGoWithContextNoError(t *testing.T) {
 func TestWaitGroup(t *testing.T) {
 	t.Run("Basic functionality", func(t *testing.T) {
 		wg := x.NewWaitGroup()
+		var mu sync.Mutex
 		counter := 0
 		for i := 0; i < 5; i++ {
 			wg.Go(func() error {
+				mu.Lock()
+				defer mu.Unlock()
 				counter++
 				return nil
 			})
 		}
 		err := wg.Wait()
 		assert.NoError(t, err)
-		// assert.Equal(t, 5, counter)
+		assert.Equal(t, 5, counter)
 	})
 
 	t.Run("Error handling", func(t *testing.T) {

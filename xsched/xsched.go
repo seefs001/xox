@@ -146,7 +146,8 @@ func (c *Cron) run() {
 			for _, job := range c.jobs {
 				if !job.next.After(now) {
 					go job.job()
-					job.next = job.schedule.Next(now)
+					// Update next execution time based on the current job's schedule
+					job.next = job.schedule.Next(job.next)
 				}
 			}
 			c.mutex.Unlock()

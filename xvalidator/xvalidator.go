@@ -119,13 +119,6 @@ func required(field string, value interface{}) error {
 		}
 	case reflect.Bool:
 		return nil
-	case reflect.Struct:
-		if v.Type() == reflect.TypeOf(time.Time{}) {
-			t := v.Interface().(time.Time)
-			if t.IsZero() || t.Year() < 1 {
-				return ValidationError{Field: field, Message: "This field is required"}
-			}
-		}
 	default:
 		if v.IsZero() {
 			return ValidationError{Field: field, Message: "This field is required"}
@@ -154,9 +147,6 @@ func min(field string, value interface{}, arg string) error {
 
 	switch v.Kind() {
 	case reflect.String:
-		if v.String() == "" {
-			return nil // Allow empty string unless required is also specified
-		}
 		if v.Len() < int(num) {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at least %v characters long", num)}
 		}
@@ -193,7 +183,18 @@ func max(field string, value interface{}, arg string) error {
 	}
 
 	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at most %v", num)}
+		}
+		v = v.Elem()
+	}
+
 	switch v.Kind() {
+	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+		if v.Len() > int(num) {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must have at most %v elements", num)}
+		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if v.Int() > int64(num) {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at most %v", num)}
@@ -205,10 +206,6 @@ func max(field string, value interface{}, arg string) error {
 	case reflect.Float32, reflect.Float64:
 		if v.Float() > num {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must be at most %v", num)}
-		}
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
-		if v.Len() > int(num) {
-			return ValidationError{Field: field, Message: fmt.Sprintf("Must have at most %v elements", num)}
 		}
 	default:
 		return fmt.Errorf("max validator not supported for type %v in field %s", v.Kind(), field)
@@ -224,7 +221,7 @@ func email(field string, value interface{}) error {
 	if str == "" {
 		return nil // Allow empty email unless required is also specified
 	}
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 	if !emailRegex.MatchString(str) {
 		return ValidationError{Field: field, Message: "Invalid email format"}
 	}
@@ -264,6 +261,13 @@ func length(field string, value interface{}, arg string) error {
 	}
 
 	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ValidationError{Field: field, Message: fmt.Sprintf("Must have exactly %d elements", length)}
+		}
+		v = v.Elem()
+	}
+
 	switch v.Kind() {
 	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
 		if v.Len() != length {
@@ -367,21 +371,15 @@ func datetime(field string, value interface{}, layout string) error {
 		return fmt.Errorf("datetime validator requires a layout argument for field %s", field)
 	}
 
-	switch v := value.(type) {
-	case string:
-		if v == "" {
-			return nil // Allow empty string unless required is also specified
-		}
-		if _, err := time.Parse(layout, v); err != nil {
-			return ValidationError{Field: field, Message: fmt.Sprintf("Must be a valid datetime in the format %s", layout)}
-		}
-	case time.Time:
-		// For time.Time, we need to check if it's a valid date
-		if v.Year() < 1 || v.Year() > 9999 || v.Month() < 1 || v.Month() > 12 || v.Day() < 1 || v.Day() > 31 {
-			return ValidationError{Field: field, Message: "Invalid date"}
-		}
-	default:
-		return fmt.Errorf("datetime validator requires a string or time.Time for field %s", field)
+	str, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("datetime validator requires a string for field %s", field)
+	}
+	if str == "" {
+		return nil // Allow empty string unless required is also specified
+	}
+	if _, err := time.Parse(layout, str); err != nil {
+		return ValidationError{Field: field, Message: fmt.Sprintf("Must be a valid datetime in the format %s", layout)}
 	}
 	return nil
 }

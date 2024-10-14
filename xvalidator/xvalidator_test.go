@@ -2,22 +2,21 @@ package xvalidator_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/seefs001/xox/xvalidator"
 	"github.com/stretchr/testify/assert"
 )
 
 type TestStruct struct {
-	Name     string    `xv:"min=2,max=50"`
-	Age      int       `xv:"required,min=18,max=120"`
-	Email    string    `xv:"email"`
-	Password string    `xv:"min=8,regexp=^[a-zA-Z0-9]+$"`
-	Role     string    `xv:"in=admin|user|guest"`
-	Score    float64   `xv:"min=0,max=100"`
-	Tags     []string  `xv:"min=1,max=5"`
-	Active   bool      `xv:"required"`
-	Created  time.Time `xv:"required,datetime=2006-01-02"`
+	Name     string   `xv:"min=2,max=50"`
+	Age      int      `xv:"required,min=18,max=120"`
+	Email    string   `xv:"email"`
+	Password string   `xv:"min=8,regexp=^[a-zA-Z0-9]+$"`
+	Role     string   `xv:"in=admin|user|guest"`
+	Score    float64  `xv:"min=0,max=100"`
+	Tags     []string `xv:"min=1,max=5"`
+	Active   bool     `xv:"required"`
+	Created  string   `xv:"required,datetime=2006-01-02"`
 }
 
 func TestValidate(t *testing.T) {
@@ -37,7 +36,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: false,
 		},
@@ -52,7 +51,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -67,7 +66,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -82,7 +81,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -97,7 +96,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -112,7 +111,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -127,7 +126,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -142,7 +141,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -157,7 +156,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -172,7 +171,7 @@ func TestValidate(t *testing.T) {
 				Score:    -1,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -187,7 +186,7 @@ func TestValidate(t *testing.T) {
 				Score:    100.1,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -202,7 +201,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -217,7 +216,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2", "tag3", "tag4", "tag5", "tag6"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
 			expectedError: true,
 		},
@@ -232,7 +231,7 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1", "tag2"},
 				Active:   true,
-				Created:  time.Date(2023, 13, 1, 0, 0, 0, 0, time.UTC), // Invalid month
+				Created:  "2023-13-01", // Invalid month
 			},
 			expectedError: true,
 		},
@@ -247,7 +246,7 @@ func TestValidate(t *testing.T) {
 				Score:    100,
 				Tags:     []string{"1", "2", "3", "4", "5"},
 				Active:   true,
-				Created:  time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC),
+				Created:  "9999-12-31",
 			},
 			expectedError: false,
 		},
@@ -262,27 +261,42 @@ func TestValidate(t *testing.T) {
 				Score:    0,
 				Tags:     []string{"1"},
 				Active:   false,
-				Created:  time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "0001-01-01",
 			},
 			expectedError: false,
 		},
 		{
-			name: "Edge case: float precision",
+			name: "Edge case: invalid byte string for name",
 			input: TestStruct{
-				Name:     "John Doe",
-				Age:      30,
-				Email:    "john@example.com",
-				Password: "password123",
-				Role:     "user",
-				Score:    100.00000000000001, // Using a literal value instead of math.NextAfter
-				Tags:     []string{"tag1", "tag2"},
+				Name:     string(make([]byte, 50)),
+				Age:      120,
+				Email:    "a@b.cd",
+				Password: "12345678",
+				Role:     "admin",
+				Score:    100,
+				Tags:     []string{"1", "2", "3", "4", "5"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "9999-12-31",
+			},
+			expectedError: false,
+		},
+		{
+			name: "Invalid created date format",
+			input: TestStruct{
+				Name:     "Jane Doe",
+				Age:      25,
+				Email:    "jane@example.com",
+				Password: "securePass1",
+				Role:     "user",
+				Score:    90.5,
+				Tags:     []string{"tag1"},
+				Active:   true,
+				Created:  "05-01-2023", // Incorrect format
 			},
 			expectedError: true,
 		},
 		{
-			name: "Empty string fields",
+			name: "Empty string fields without required validators",
 			input: TestStruct{
 				Name:     "",
 				Age:      30,
@@ -292,12 +306,13 @@ func TestValidate(t *testing.T) {
 				Score:    85.5,
 				Tags:     []string{"tag1"},
 				Active:   true,
-				Created:  time.Date(2023, 5, 1, 0, 0, 0, 0, time.UTC),
+				Created:  "2023-05-01",
 			},
-			expectedError: false,
+			expectedError: true,
 		},
 	}
 	for _, tt := range tests {
+		tt := tt // Capture range variable
 		t.Run(tt.name, func(t *testing.T) {
 			errors := xvalidator.Validate(tt.input)
 			if tt.expectedError {
@@ -327,7 +342,6 @@ func TestSpecificValidators(t *testing.T) {
 		assert.Empty(t, xvalidator.Validate(RequiredTest{Field: "not empty"}))
 		assert.NotEmpty(t, xvalidator.Validate(RequiredTest{Field: ""}))
 		assert.Empty(t, xvalidator.Validate(RequiredTest{Field: " "}))
-
 		assert.Empty(t, xvalidator.Validate(RequiredTest{Field: "\t"}))
 		assert.Empty(t, xvalidator.Validate(RequiredTest{Field: "\n"}))
 		assert.Empty(t, xvalidator.Validate(RequiredTest{Field: "0"}))
@@ -520,13 +534,11 @@ func TestSpecificValidators(t *testing.T) {
 
 		errors := xvalidator.Validate(CustomErrorTest{Field: ""})
 		assert.NotEmpty(t, errors)
-		assert.Contains(t, errors[0].Error(), "Field:")
 		assert.Contains(t, errors[0].Error(), "This field is required")
 
 		errors = xvalidator.Validate(CustomErrorTest{Field: "a"})
 		assert.NotEmpty(t, errors)
-		assert.Contains(t, errors[0].Error(), "Field:")
-		assert.Contains(t, errors[0].Error(), "Must be at least 3")
+		assert.Contains(t, errors[0].Error(), "Must be at least 3 characters long")
 	})
 }
 

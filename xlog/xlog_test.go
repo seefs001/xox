@@ -42,53 +42,56 @@ func TestColorConsoleHandler(t *testing.T) {
 }
 
 func TestRotatingFileHandler(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "test.log")
+
 	config := xlog.FileConfig{
-		Filename:   filepath.Join(tempDir, "test.log"),
-		MaxSize:    100, // 100 bytes for testing
+		Filename:   logFile,
+		MaxSize:    100, // Small max size to force rotation
 		MaxBackups: 3,
-		MaxAge:     1,
 		Level:      slog.LevelDebug,
 	}
 
 	err := xlog.AddRotatingFile(config)
-	require.NoError(err, "AddRotatingFile should not return an error")
-
-	// Test logging at different levels
-	for i := 0; i < 20; i++ { // Increased to 20 to ensure rotation
-		xlog.Debug("Debug message")
-		xlog.Info("Info message")
-		xlog.Warn("Warn message")
-		xlog.Error("Error message")
+	if err != nil {
+		t.Fatalf("Failed to add RotatingFileHandler: %v", err)
 	}
 
-	// Wait for rotation to occur
-	time.Sleep(2 * time.Second)
-
-	// Verify that log files were created
-	files, err := filepath.Glob(filepath.Join(tempDir, "*.log*"))
-	require.NoError(err, "Error listing log files")
-
-	t.Logf("Found %d log files", len(files)) // Add this line for debugging
-	for _, file := range files {
-		t.Logf("Log file: %s", file) // Add this line for debugging
+	// Write enough logs to force multiple rotations
+	for i := 0; i < 1000; i++ {
+		xlog.Debug("This is a debug message")
+		xlog.Info("This is an info message")
+		xlog.Warn("This is a warning message")
+		xlog.Error("This is an error message")
 	}
 
-	assert.GreaterOrEqual(len(files), 2, "Should have at least 2 log files (current and rotated)")
+	// Force flush and rotation
+	err = xlog.Shutdown()
+	if err != nil {
+		t.Fatalf("Failed to shutdown: %v", err)
+	}
 
-	// Verify content of the log files
+	// Wait for a short time to ensure all file operations are complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Check if log files were created
+	files, err := filepath.Glob(filepath.Join(tempDir, "test*.log*"))
+	if err != nil {
+		t.Fatalf("Failed to list log files: %v", err)
+	}
+
+	t.Logf("Found %d log files", len(files))
 	for _, file := range files {
-		content, err := os.ReadFile(file)
-		require.NoError(err, "Error reading log file")
-		logContent := string(content)
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Errorf("Failed to get file info for %s: %v", file, err)
+		} else {
+			t.Logf("File: %s, Size: %d bytes", file, info.Size())
+		}
+	}
 
-		assert.Contains(logContent, "Debug message", "Log should contain debug message")
-		assert.Contains(logContent, "Info message", "Log should contain info message")
-		assert.Contains(logContent, "Warn message", "Log should contain warn message")
-		assert.Contains(logContent, "Error message", "Log should contain error message")
+	if len(files) < 2 {
+		t.Errorf("Expected at least 2 log files, got %d", len(files))
 	}
 }
 

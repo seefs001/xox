@@ -189,6 +189,34 @@ type TimeoutConfig struct {
 	ErrorLogger    func(msg string, keyvals ...interface{})
 }
 
+type timeoutResponseWriter struct {
+	http.ResponseWriter
+	mu         sync.Mutex
+	written    bool
+	statusCode int
+}
+
+func (w *timeoutResponseWriter) WriteHeader(statusCode int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.written {
+		w.statusCode = statusCode
+		w.ResponseWriter.WriteHeader(statusCode)
+		w.written = true
+	}
+}
+
+func (w *timeoutResponseWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.written {
+		w.statusCode = http.StatusOK
+		w.ResponseWriter.WriteHeader(w.statusCode)
+		w.written = true
+	}
+	return w.ResponseWriter.Write(b)
+}
+
 // Timeout wraps a handler in a timeout.
 func Timeout(config ...TimeoutConfig) Middleware {
 	cfg := TimeoutConfig{
@@ -212,9 +240,10 @@ func Timeout(config ...TimeoutConfig) Middleware {
 			ctx, cancel := context.WithTimeout(r.Context(), cfg.Timeout)
 			defer cancel()
 
-			done := make(chan bool)
+			tw := &timeoutResponseWriter{ResponseWriter: w}
+			done := make(chan bool, 1)
 			go func() {
-				next.ServeHTTP(w, r.WithContext(ctx))
+				next.ServeHTTP(tw, r.WithContext(ctx))
 				done <- true
 			}()
 
@@ -222,13 +251,17 @@ func Timeout(config ...TimeoutConfig) Middleware {
 			case <-done:
 				return
 			case <-ctx.Done():
-				if cfg.TimeoutHandler != nil {
-					cfg.TimeoutHandler(w, r)
-				} else {
-					if cfg.ErrorLogger != nil {
-						cfg.ErrorLogger("Request timed out", "uri", r.RequestURI)
+				tw.mu.Lock()
+				defer tw.mu.Unlock()
+				if !tw.written {
+					if cfg.TimeoutHandler != nil {
+						cfg.TimeoutHandler(w, r)
+					} else {
+						if cfg.ErrorLogger != nil {
+							cfg.ErrorLogger("Request timed out", "uri", r.RequestURI)
+						}
+						http.Error(w, "Request timed out", http.StatusGatewayTimeout)
 					}
-					http.Error(w, "Request timed out", http.StatusGatewayTimeout)
 				}
 			}
 		})
@@ -572,9 +605,13 @@ func (sm *SessionManager) Get(r *http.Request, key string) (interface{}, bool) {
 // Set sets a value in the session
 func (sm *SessionManager) Set(r *http.Request, key string, value interface{}) {
 	session := sm.getSession(r)
-	if session != nil {
-		session[key] = value
+	if session == nil {
+		// If session doesn't exist, create a new one
+		session = make(map[string]interface{})
+		ctx := context.WithValue(r.Context(), sm.sessionName, session)
+		*r = *r.WithContext(ctx)
 	}
+	session[key] = value
 }
 
 // Delete removes a value from the session
@@ -600,7 +637,11 @@ func (sm *SessionManager) getSession(r *http.Request) map[string]interface{} {
 	if session, ok := r.Context().Value(sm.sessionName).(map[string]interface{}); ok {
 		return session
 	}
-	return nil
+	// If session doesn't exist, create a new one
+	session := make(map[string]interface{})
+	ctx := context.WithValue(r.Context(), sm.sessionName, session)
+	*r = *r.WithContext(ctx)
+	return session
 }
 
 // Session returns a middleware that handles session management
