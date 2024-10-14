@@ -2,6 +2,7 @@ package xcolor
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 )
@@ -20,6 +21,7 @@ const (
 	White  ColorCode = "\033[37m"
 	Bold   ColorCode = "\033[1m"
 	Italic ColorCode = "\033[3m"
+	None   ColorCode = ""
 )
 
 var (
@@ -151,4 +153,13 @@ func PrintRainbow(format string, a ...interface{}) {
 // PrintlnRainbow prints text with each character in a different color, followed by a newline
 func PrintlnRainbow(format string, a ...interface{}) {
 	fmt.Println(Rainbow(fmt.Sprintf(format, a...)))
+}
+
+// Fprintf writes formatted output to an io.Writer with the specified color
+func Fprintf(w io.Writer, color ColorCode, format string, a ...interface{}) {
+	if colorEnabled {
+		fmt.Fprintf(w, string(color)+format+string(Reset), a...)
+	} else {
+		fmt.Fprintf(w, format, a...)
+	}
 }

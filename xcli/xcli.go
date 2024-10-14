@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -22,15 +23,21 @@ var (
 
 // App represents the main CLI application
 type App struct {
-	Name         string
-	Description  string
-	Version      string
-	Flags        *flag.FlagSet
-	Commands     map[string]*Command
-	DefaultRun   func(ctx context.Context, app *App) error
-	ErrorHandler func(error)                               // Error handling function
-	BeforeRun    func(ctx context.Context, app *App) error // Function to run before command execution
-	AfterRun     func(ctx context.Context, app *App) error // Function to run after command execution
+	Name                  string
+	Description           string
+	Version               string
+	Flags                 *flag.FlagSet
+	Commands              map[string]*Command
+	DefaultRun            func(ctx context.Context, app *App) error
+	ErrorHandler          func(error)
+	BeforeRun             func(ctx context.Context, app *App) error
+	AfterRun              func(ctx context.Context, app *App) error
+	UnknownCommandHandler func(ctx context.Context, cmdName string, args []string) error // Handler for unsupported commands
+
+	// Added fields for customizing output messages
+	CustomErrorPrinter       func(err error)
+	CustomHelpPrinter        func(app *App)
+	CustomCommandHelpPrinter func(app *App, cmdName string)
 }
 
 // Command represents a CLI command
@@ -87,6 +94,11 @@ func (a *App) SetAfterRun(after func(ctx context.Context, app *App) error) {
 	a.AfterRun = after
 }
 
+// SetUnknownCommandHandler sets a custom handler for unsupported commands
+func (a *App) SetUnknownCommandHandler(handler func(ctx context.Context, cmdName string, args []string) error) {
+	a.UnknownCommandHandler = handler
+}
+
 // Run executes the application
 func (a *App) Run(ctx context.Context, args []string) error {
 	defer func() {
@@ -98,23 +110,30 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		}
 	}()
 
-	if len(args) > 1 && args[1] == "--help" {
-		a.PrintCommandHelp(args[0])
-		return nil
+	// Ensure Flags is initialized
+	if a.Flags == nil {
+		a.Initialize()
 	}
 
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+	// Parse global flags
+	if err := a.Flags.Parse(args[1:]); err != nil {
+		return a.handleError(xerror.Wrap(err, "failed to parse flags"))
+	}
+	parsedArgs := a.Flags.Args()
+
+	// Check for help or version flags
+	helpFlag := a.Flags.Lookup("help")
+	versionFlag := a.Flags.Lookup("version")
+
+	if (helpFlag != nil && helpFlag.Value.(flag.Getter).Get().(bool)) ||
+		(a.Flags.Lookup("h") != nil && a.Flags.Lookup("h").Value.(flag.Getter).Get().(bool)) {
 		a.PrintHelp()
 		return nil
 	}
-
-	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
-		fmt.Printf("%s version %s\n", a.Name, a.Version)
+	if (versionFlag != nil && versionFlag.Value.(flag.Getter).Get().(bool)) ||
+		(a.Flags.Lookup("v") != nil && a.Flags.Lookup("v").Value.(flag.Getter).Get().(bool)) {
+		xcolor.Println(xcolor.Cyan, "%s version %s", a.Name, a.Version)
 		return nil
-	}
-
-	if err := a.Flags.Parse(args); err != nil {
-		return a.handleError(xerror.Wrap(err, "failed to parse flags"))
 	}
 
 	// Run BeforeRun function if set
@@ -125,24 +144,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	var err error
-	if len(a.Flags.Args()) > 0 {
-		// Skip the first argument (program name)
-		cmdArgs := a.Flags.Args()[1:]
-		if len(cmdArgs) > 0 {
-			if cmd, exists := a.Commands[cmdArgs[0]]; exists {
-				err = a.runCommand(ctx, cmd, cmdArgs[1:])
-			} else {
-				err = fmt.Errorf("unknown command: %s", cmdArgs[0])
-			}
-		} else if a.DefaultRun != nil {
-			startTime := time.Now()
-			err = a.DefaultRun(ctx, a)
-			if debugMode {
-				xlog.Infof("App execution time: %v", time.Since(startTime))
-			}
+	if len(parsedArgs) > 0 {
+		if cmd, exists := a.Commands[parsedArgs[0]]; exists {
+			err = a.runCommand(ctx, cmd, parsedArgs[1:])
 		} else {
-			// If no DefaultRun is set, print help
-			a.PrintHelp()
+			if a.UnknownCommandHandler != nil {
+				err = a.UnknownCommandHandler(ctx, parsedArgs[0], parsedArgs[1:])
+			} else {
+				err = fmt.Errorf("unknown command: %s", parsedArgs[0])
+			}
 		}
 	} else if a.DefaultRun != nil {
 		startTime := time.Now()
@@ -151,7 +161,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 			xlog.Infof("App execution time: %v", time.Since(startTime))
 		}
 	} else {
-		// If no DefaultRun is set, print help
 		a.PrintHelp()
 	}
 
@@ -194,7 +203,11 @@ func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error
 // handleError processes the error and calls the error handling function if set
 func (a *App) handleError(err error) error {
 	if err != nil {
-		xlog.Errorf("Error: %v", err)
+		if a.CustomErrorPrinter != nil {
+			a.CustomErrorPrinter(err)
+		} else {
+			xcolor.Println(xcolor.Red, "Error: %v", err)
+		}
 		if a.ErrorHandler != nil {
 			a.ErrorHandler(err)
 		} else {
@@ -206,7 +219,7 @@ func (a *App) handleError(err error) error {
 				if len(suggestions) > 0 {
 					xcolor.Println(xcolor.Yellow, "\nDid you mean:")
 					for _, suggestion := range suggestions {
-						fmt.Printf("  %s\n", suggestion)
+						xcolor.Println(xcolor.Cyan, "  %s", suggestion)
 					}
 				}
 			}
@@ -217,6 +230,10 @@ func (a *App) handleError(err error) error {
 
 // PrintHelp prints the help message for the application and its commands
 func (a *App) PrintHelp() {
+	if a.CustomHelpPrinter != nil {
+		a.CustomHelpPrinter(a)
+		return
+	}
 	xcolor.Println(xcolor.Bold, "\n%s", a.Name)
 	xcolor.Println(xcolor.Green, "%s\n", a.Description)
 
@@ -228,7 +245,8 @@ func (a *App) PrintHelp() {
 		xcolor.Println(xcolor.Yellow, "Flags:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		a.Flags.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(w, "  -%s\t%s\t(default: %s)\n", f.Name, f.Usage, f.DefValue)
+			xcolor.Fprintf(w, xcolor.Cyan, "  -%s", f.Name)
+			xcolor.Fprintf(w, xcolor.None, "\t%s\t(default: %s)\n", f.Usage, f.DefValue)
 		})
 		x.Must0(w.Flush())
 		fmt.Println()
@@ -251,7 +269,8 @@ func (a *App) PrintHelp() {
 			if len(cmd.Aliases) > 0 {
 				aliases = fmt.Sprintf(" (aliases: %s)", strings.Join(cmd.Aliases, ", "))
 			}
-			fmt.Fprintf(w, "  %s\t%s%s\n", cmd.Name, cmd.Description, aliases)
+			xcolor.Fprintf(w, xcolor.Cyan, "  %s", cmd.Name)
+			xcolor.Fprintf(w, xcolor.None, "\t%s%s\n", cmd.Description, aliases)
 		}
 		x.Must0(w.Flush())
 		fmt.Println()
@@ -270,6 +289,10 @@ func EnableDebug(enable bool) {
 
 // PrintCommandHelp prints help information for a specific command
 func (a *App) PrintCommandHelp(cmdName string) {
+	if a.CustomCommandHelpPrinter != nil {
+		a.CustomCommandHelpPrinter(a, cmdName)
+		return
+	}
 	if cmd, exists := a.Commands[cmdName]; exists {
 		xcolor.Println(xcolor.Bold, "\n%s", cmd.Name)
 		xcolor.Println(xcolor.Green, "%s\n", cmd.Description)
@@ -282,7 +305,8 @@ func (a *App) PrintCommandHelp(cmdName string) {
 			xcolor.Println(xcolor.Yellow, "Flags:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			cmd.Flags.VisitAll(func(f *flag.Flag) {
-				fmt.Fprintf(w, "  -%s\t%s\t(default: %s)\n", f.Name, f.Usage, f.DefValue)
+				xcolor.Fprintf(w, xcolor.Cyan, "  -%s", f.Name)
+				xcolor.Fprintf(w, xcolor.None, "\t%s\t(default: %s)\n", f.Usage, f.DefValue)
 			})
 			x.Must0(w.Flush())
 			fmt.Println()
@@ -292,13 +316,14 @@ func (a *App) PrintCommandHelp(cmdName string) {
 			xcolor.Println(xcolor.Yellow, "Subcommands:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			for _, subCmd := range cmd.SubCommands {
-				fmt.Fprintf(w, "  %s\t%s\n", subCmd.Name, subCmd.Description)
+				xcolor.Fprintf(w, xcolor.Cyan, "  %s", subCmd.Name)
+				xcolor.Fprintf(w, xcolor.None, "\t%s\n", subCmd.Description)
 			}
 			x.Must0(w.Flush())
 			fmt.Println()
 		}
 	} else {
-		fmt.Printf("Unknown command: %s\n", cmdName)
+		xcolor.Println(xcolor.Red, "Unknown command: %s", cmdName)
 	}
 }
 
@@ -321,4 +346,17 @@ func (a *App) suggestCommands(input string) []string {
 		}
 	}
 	return suggestions
+}
+
+// Initialize sets up the global flags
+func (a *App) Initialize() {
+	a.Flags = flag.NewFlagSet(a.Name, flag.ContinueOnError)
+	a.Flags.SetOutput(io.Discard) // Prevent the flag package from writing to stderr
+	a.Flags.Usage = func() {
+		a.PrintHelp()
+	}
+	a.Flags.Bool("help", false, "Display help information")
+	a.Flags.Bool("h", false, "Display help information")
+	a.Flags.Bool("version", false, "Display version information")
+	a.Flags.Bool("v", false, "Display version information")
 }
