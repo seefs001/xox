@@ -1,12 +1,16 @@
 package xmw
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
+	"embed"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -745,4 +749,228 @@ type gzipResponseWriter struct {
 
 func (grw gzipResponseWriter) Write(b []byte) (int, error) {
 	return grw.Writer.Write(b)
+}
+
+// StaticConfig defines the config for Static middleware
+type StaticConfig struct {
+	Next      func(c *http.Request) bool
+	Root      string
+	Index     string
+	Browse    bool
+	MaxAge    int
+	Prefix    string
+	APIPrefix string
+	Files     map[string]File
+	EmbedFS   embed.FS
+}
+
+// File represents a file that can be served
+type File struct {
+	Content      io.Reader
+	ContentType  string
+	LastModified time.Time
+	ETag         string
+}
+
+// Static returns a middleware that serves static files, API requests, and io.Reader content
+func Static(config ...StaticConfig) Middleware {
+	cfg := StaticConfig{
+		Next:      nil,
+		Root:      "public",
+		Index:     "index.html",
+		Browse:    false,
+		MaxAge:    0,
+		Prefix:    "/",
+		APIPrefix: "/api",
+		Files:     make(map[string]File),
+	}
+
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+
+	var fsys http.FileSystem
+	if cfg.EmbedFS != (embed.FS{}) {
+		fsys = http.FS(cfg.EmbedFS)
+	} else {
+		fsys = http.Dir(cfg.Root)
+	}
+	fileServer := http.FileServer(fsys)
+	filesMutex := &sync.RWMutex{}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if cfg.Next != nil && cfg.Next(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Check if it's an API request
+			if strings.HasPrefix(r.URL.Path, cfg.APIPrefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Strip prefix if necessary
+			path := r.URL.Path
+			if cfg.Prefix != "/" {
+				if strings.HasPrefix(path, cfg.Prefix) {
+					path = strings.TrimPrefix(path, cfg.Prefix)
+				} else {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			// If path is empty or ends with '/', append index.html
+			if path == "" || path[len(path)-1] == '/' {
+				path += cfg.Index
+			}
+
+			// Check if we have a File for this path
+			filesMutex.RLock()
+			file, exists := cfg.Files[path]
+			filesMutex.RUnlock()
+
+			if exists {
+				serveFile(w, r, file, cfg.MaxAge)
+				return
+			}
+
+			// If not found in Files, check the filesystem or embed.FS
+			f, err := fsys.Open(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					// Try serving index.html for SPA
+					indexPath := filepath.Join(cfg.Root, cfg.Index)
+					if indexFile, err := fsys.Open(indexPath); err == nil {
+						defer indexFile.Close()
+						stat, _ := indexFile.Stat()
+						file := File{
+							Content:      indexFile,
+							ContentType:  "text/html",
+							LastModified: stat.ModTime(),
+							ETag:         generateETag(stat),
+						}
+						serveFile(w, r, file, cfg.MaxAge)
+						return
+					}
+				}
+				http.NotFound(w, r)
+				return
+			}
+			defer f.Close()
+
+			stat, err := f.Stat()
+			if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			if stat.IsDir() {
+				indexPath := filepath.Join(path, cfg.Index)
+				if indexFile, err := fsys.Open(indexPath); err == nil {
+					defer indexFile.Close()
+					indexStat, _ := indexFile.Stat()
+					file := File{
+						Content:      indexFile,
+						ContentType:  "text/html",
+						LastModified: indexStat.ModTime(),
+						ETag:         generateETag(indexStat),
+					}
+					serveFile(w, r, file, cfg.MaxAge)
+					return
+				}
+				if !cfg.Browse {
+					http.NotFound(w, r)
+					return
+				}
+				// Use the built-in file server to handle directory listing
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+
+			// Serve the file
+			file = File{
+				Content:      f.(io.ReadSeeker),
+				ContentType:  getContentType(stat.Name()),
+				LastModified: stat.ModTime(),
+				ETag:         generateETag(stat),
+			}
+			serveFile(w, r, file, cfg.MaxAge)
+		})
+	}
+}
+
+func serveFile(w http.ResponseWriter, r *http.Request, file File, maxAge int) {
+	// Set Content-Type
+	if file.ContentType != "" {
+		w.Header().Set("Content-Type", file.ContentType)
+	}
+
+	// Set Last-Modified
+	w.Header().Set("Last-Modified", file.LastModified.UTC().Format(http.TimeFormat))
+
+	// Set ETag
+	w.Header().Set("ETag", file.ETag)
+
+	// Set Cache-Control
+	if maxAge > 0 {
+		w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge))
+	}
+
+	// Check If-Modified-Since
+	if t, err := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since")); err == nil && file.LastModified.Before(t.Add(time.Second)) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// Check If-None-Match
+	if r.Header.Get("If-None-Match") == file.ETag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// Serve the content
+	http.ServeContent(w, r, "", file.LastModified, file.Content.(io.ReadSeeker))
+}
+
+func generateETag(info os.FileInfo) string {
+	return fmt.Sprintf(`"%x-%x"`, info.ModTime().Unix(), info.Size())
+}
+
+func getContentType(name string) string {
+	ext := filepath.Ext(name)
+	switch ext {
+	case ".html", ".htm":
+		return "text/html"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".json":
+		return "application/json"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// AddFile adds or updates a file in the Files map
+func (cfg *StaticConfig) AddFile(path string, content io.Reader, contentType string, lastModified time.Time) {
+	contentBytes, _ := io.ReadAll(content)
+	etag := fmt.Sprintf(`"%x"`, md5.Sum(contentBytes))
+	cfg.Files[path] = File{
+		Content:      io.NopCloser(bytes.NewReader(contentBytes)),
+		ContentType:  contentType,
+		LastModified: lastModified,
+		ETag:         etag,
+	}
 }
