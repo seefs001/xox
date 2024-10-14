@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,7 +87,7 @@ type Bot struct {
 	requestTimeout time.Duration
 	rateLimiter    *RateLimiter
 	debug          bool
-	isTestServer   bool
+	// isTestServer   bool
 }
 
 // BotOption allows customizing the Bot
@@ -109,7 +110,7 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 		requestTimeout: 30 * time.Second,
 		rateLimiter:    NewRateLimiter(0, 0), // Default to no rate limiting
 		debug:          false,                // Default debug mode is off
-		isTestServer:   false,                // Default to production server
+		// isTestServer:   false,                // Default to production server
 	}
 
 	for _, option := range options {
@@ -128,6 +129,9 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 func WithBaseURL(baseURL string) BotOption {
 	return func(b *Bot) {
 		if baseURL != "" {
+			if !strings.HasSuffix(baseURL, "/") {
+				baseURL += "/"
+			}
 			b.baseURL = baseURL
 		}
 	}
@@ -169,7 +173,14 @@ func WithRateLimit(requestsPerSecond float64, burstSize int) BotOption {
 	}
 }
 
-// WithDebug enables or disables debug mode
+// WithHttpClientDebug sets the debug mode for the HTTP client
+func WithHttpClientDebug(debug bool) BotOption {
+	return func(b *Bot) {
+		b.client.SetDebug(debug)
+	}
+}
+
+// WithDebug sets the debug mode for the bot
 func WithDebug(debug bool) BotOption {
 	return func(b *Bot) {
 		b.debug = debug
@@ -177,11 +188,11 @@ func WithDebug(debug bool) BotOption {
 }
 
 // WithTestServer sets the bot to use the Telegram test server
-func WithTestServer() BotOption {
-	return func(b *Bot) {
-		b.isTestServer = true
-	}
-}
+// func WithTestServer() BotOption {
+//  return func(b *Bot) {
+//      b.isTestServer = true
+//  }
+// }
 
 // defaultErrorHandler is the default error handler that logs errors using xlog
 func defaultErrorHandler(err error) {
@@ -260,11 +271,11 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 	b.rateLimiter.Wait() // Wait for rate limiting
 
 	var url string
-	if b.isTestServer {
-		url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
-	} else {
-		url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
-	}
+	// if b.isTestServer {
+	// 	url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
+	// } else {
+	url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
+	// }
 
 	ctx, cancel := context.WithTimeout(ctx, b.requestTimeout)
 	defer cancel()
@@ -422,6 +433,10 @@ func (b *Bot) GetUpdates(ctx context.Context, offset int, limit int) ([]Update, 
 		err := fmt.Errorf("API response not OK")
 		b.errorHandler(err)
 		return nil, err
+	}
+
+	if b.debug {
+		xlog.Debug("GetUpdates", "offset", offset, "limit", limit, "updates", len(resp.Result))
 	}
 
 	return resp.Result, nil
@@ -1334,11 +1349,11 @@ func (b *Bot) uploadFile(ctx context.Context, method string, params url.Values, 
 	}
 
 	var url string
-	if b.isTestServer {
-		url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
-	} else {
-		url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
-	}
+	// if b.isTestServer {
+	// 	url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
+	// } else {
+	url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
+	// }
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {

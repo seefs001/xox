@@ -106,8 +106,9 @@ func main() {
 	bot, err := xtelebot.NewBot(token,
 		xtelebot.WithRequestTimeout(10*time.Second),
 		xtelebot.WithDebug(true),
+		xtelebot.WithHttpClientDebug(false),
 		xtelebot.WithErrorHandler(customErrorHandler),
-		xtelebot.WithBaseURL("https://api.telegram.org"),
+		// xtelebot.WithBaseURL("https://api.telegram.org/bot"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)

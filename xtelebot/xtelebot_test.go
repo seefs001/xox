@@ -43,7 +43,7 @@ func TestBotOptions(t *testing.T) {
 
 func TestGetMe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/bottoken/getMe", r.URL.Path)
+		assert.Equal(t, "/token/getMe", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ok":true,"result":{"id":123,"is_bot":true,"first_name":"TestBot","username":"test_bot"}}`))
 	}))
@@ -63,7 +63,7 @@ func TestGetMe(t *testing.T) {
 
 func TestSendMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/bottoken/sendMessage", r.URL.Path)
+		assert.Equal(t, "/token/sendMessage", r.URL.Path)
 		assert.Equal(t, "POST", r.Method)
 		err := r.ParseMultipartForm(10 << 20) // 10 MB max memory
 		assert.NoError(t, err)
@@ -86,7 +86,7 @@ func TestSendMessage(t *testing.T) {
 
 func TestGetUpdates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/bottoken/getUpdates", r.URL.Path)
+		assert.Equal(t, "/token/getUpdates", r.URL.Path)
 		assert.Equal(t, "POST", r.Method)
 		r.ParseForm()
 		assert.Equal(t, "10", r.Form.Get("offset"))
@@ -108,7 +108,7 @@ func TestGetUpdates(t *testing.T) {
 
 func TestSendPhoto(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/bottoken/sendPhoto", r.URL.Path)
+		assert.Equal(t, "/token/sendPhoto", r.URL.Path)
 		assert.Equal(t, "POST", r.Method)
 		err := r.ParseMultipartForm(10 << 20) // 10 MB max memory
 		assert.NoError(t, err)
@@ -132,7 +132,7 @@ func TestSendPhoto(t *testing.T) {
 
 func TestAnswerCallbackQuery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/bottoken/answerCallbackQuery", r.URL.Path)
+		assert.Equal(t, "/token/answerCallbackQuery", r.URL.Path)
 		assert.Equal(t, "POST", r.Method)
 		err := r.ParseMultipartForm(10 << 20) // 10 MB max memory
 		assert.NoError(t, err)
