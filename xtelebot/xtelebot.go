@@ -73,6 +73,8 @@ const (
 	ParamCaption               = "caption"
 	ParamCaptionEntities       = "caption_entities"
 	ParamShowCaptionAboveMedia = "show_caption_above_media"
+
+	DefaultBaseURL = "https://api.telegram.org/bot"
 )
 
 // Bot represents a Telegram Bot
@@ -84,6 +86,7 @@ type Bot struct {
 	requestTimeout time.Duration
 	rateLimiter    *RateLimiter
 	debug          bool
+	isTestServer   bool
 }
 
 // BotOption allows customizing the Bot
@@ -100,12 +103,13 @@ func NewBot(token string, options ...BotOption) (*Bot, error) {
 
 	bot := &Bot{
 		token:          token,
-		baseURL:        "https://api.telegram.org",
+		baseURL:        DefaultBaseURL,
 		client:         x.Must1(xhttpc.NewClient()),
 		errorHandler:   defaultErrorHandler,
 		requestTimeout: 30 * time.Second,
 		rateLimiter:    NewRateLimiter(0, 0), // Default to no rate limiting
 		debug:          false,                // Default debug mode is off
+		isTestServer:   false,                // Default to production server
 	}
 
 	for _, option := range options {
@@ -169,6 +173,13 @@ func WithRateLimit(requestsPerSecond float64, burstSize int) BotOption {
 func WithDebug(debug bool) BotOption {
 	return func(b *Bot) {
 		b.debug = debug
+	}
+}
+
+// WithTestServer sets the bot to use the Telegram test server
+func WithTestServer() BotOption {
+	return func(b *Bot) {
+		b.isTestServer = true
 	}
 }
 
@@ -248,7 +259,12 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 
 	b.rateLimiter.Wait() // Wait for rate limiting
 
-	url := fmt.Sprintf("%s/bot%s/%s", b.baseURL, b.token, method)
+	var url string
+	if b.isTestServer {
+		url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
+	} else {
+		url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, b.requestTimeout)
 	defer cancel()
@@ -1317,7 +1333,13 @@ func (b *Bot) uploadFile(ctx context.Context, method string, params url.Values, 
 		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/bot%s/%s", b.baseURL, b.token, method)
+	var url string
+	if b.isTestServer {
+		url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
+	} else {
+		url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

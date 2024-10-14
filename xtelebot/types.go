@@ -2168,12 +2168,24 @@ type InlineQuery struct {
 	// unless the request was sent from a secret chat
 	//
 	// optional
-	ChatType string `json:"chat_type,omitempty"`
+	ChatType ChatType `json:"chat_type,omitempty"`
 	// Location sender location, only for bots that request user location.
 	//
 	// optional
 	Location *Location `json:"location,omitempty"`
 }
+
+// ChatType represents the type of chat.
+type ChatType string
+
+const (
+	ChatTypeSender     ChatType = "sender"
+	ChatTypePrivate    ChatType = "private"
+	ChatTypeGroup      ChatType = "group"
+	ChatTypeSupergroup ChatType = "supergroup"
+	ChatTypeChannel    ChatType = "channel"
+	ChatTypeUnknown    ChatType = "unknown"
+)
 
 // InlineQueryResultCachedAudio is an inline query response with cached audio.
 type InlineQueryResultCachedAudio struct {
