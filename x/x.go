@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand"
 	"net/url"
 	"os"
@@ -2013,7 +2012,7 @@ func JSONToURLValues(jsonStr string) (url.Values, error) {
 	var data map[string]interface{}
 	err := json.Unmarshal([]byte(jsonStr), &data)
 	if err != nil {
-		return nil, xerror.Wrap(err, "failed to unmarshal JSON")
+		return nil, err
 	}
 
 	values := url.Values{}
@@ -2023,19 +2022,18 @@ func JSONToURLValues(jsonStr string) (url.Values, error) {
 			values.Add(key, v)
 		case []interface{}:
 			for _, item := range v {
-				if str, ok := item.(string); ok {
-					values.Add(key, str)
-				}
+				values.Add(key, fmt.Sprint(item))
 			}
 		case float64:
-			// Handle potential int64 overflow
-			if v > float64(math.MaxInt64) || v < float64(math.MinInt64) {
-				values.Add(key, strconv.FormatFloat(v, 'f', -1, 64))
-			} else {
+			if v == float64(int64(v)) {
 				values.Add(key, strconv.FormatInt(int64(v), 10))
+			} else {
+				values.Add(key, strconv.FormatFloat(v, 'f', -1, 64))
 			}
+		case int64:
+			values.Add(key, strconv.FormatInt(v, 10))
 		default:
-			values.Add(key, fmt.Sprintf("%v", v))
+			values.Add(key, fmt.Sprint(v))
 		}
 	}
 

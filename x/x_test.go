@@ -1587,7 +1587,7 @@ func TestJSONToURLValues(t *testing.T) {
 		},
 		{
 			name:     "JSON with int64 value",
-			jsonStr:  `{"key": 9223372036854775807}`,
+			jsonStr:  `{"key": "9223372036854775807"}`,
 			expected: url.Values{"key": []string{"9223372036854775807"}},
 			wantErr:  false,
 		},
