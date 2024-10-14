@@ -266,4 +266,24 @@ func TestXJSON(t *testing.T) {
 		assert.Error(t, err)
 		xlog.Error("Error handling for invalid JSON parsing", "error", err)
 	})
+
+	t.Run("GenerateJSONSchema", func(t *testing.T) {
+
+		type TestStruct struct {
+			Name string `json:"name" description:"The name of the person"`
+			Age  int    `json:"age" description:"The age of the person"`
+		}
+
+		schema, err := xjson.GenerateJSONSchema(TestStruct{})
+		assert.NoError(t, err)
+		assert.IsType(t, map[string]interface{}{}, schema)
+		assert.Contains(t, schema, "type")
+		assert.Contains(t, schema, "properties")
+		assert.Contains(t, schema, "required")
+		assert.Contains(t, schema["properties"], "name")
+		assert.Contains(t, schema["properties"], "age")
+		assert.Contains(t, schema["required"], "name")
+		assert.Contains(t, schema["required"], "age")
+		xlog.Info("JSON Schema", "schema", schema)
+	})
 }

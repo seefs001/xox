@@ -3,6 +3,7 @@ package xjson
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -401,4 +402,58 @@ func getArray(data JSONObject, path JSONPath) (JSONArray, error) {
 	default:
 		return nil, fmt.Errorf("value at path %s is not an array", path)
 	}
+}
+
+// GenerateJSONSchema generates a JSON schema for the given struct
+func GenerateJSONSchema(v interface{}) (map[string]interface{}, error) {
+	t := reflect.TypeOf(v)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("input must be a struct or pointer to struct")
+	}
+
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": make(map[string]interface{}),
+		"required":   []string{},
+	}
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "-" {
+			continue
+		}
+
+		fieldName := strings.Split(jsonTag, ",")[0]
+		if fieldName == "" {
+			fieldName = field.Name
+		}
+
+		fieldSchema := map[string]interface{}{}
+		switch field.Type.Kind() {
+		case reflect.String:
+			fieldSchema["type"] = "string"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			fieldSchema["type"] = "integer"
+		case reflect.Float32, reflect.Float64:
+			fieldSchema["type"] = "number"
+		case reflect.Bool:
+			fieldSchema["type"] = "boolean"
+		}
+
+		if description := field.Tag.Get("description"); description != "" {
+			fieldSchema["description"] = description
+		}
+
+		schema["properties"].(map[string]interface{})[fieldName] = fieldSchema
+
+		if !strings.Contains(jsonTag, "omitempty") {
+			schema["required"] = append(schema["required"].([]string), fieldName)
+		}
+	}
+
+	return schema, nil
 }

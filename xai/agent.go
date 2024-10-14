@@ -147,11 +147,56 @@ type Agent struct {
 	eventChan      chan Event
 	name           string // Add a name field to identify agents
 	callback       AgentCallback
+	memory         Memory
 }
 
 type AgentOption func(*Agent)
 
 type ToolExecutor func(toolName string, args map[string]interface{}) (string, error)
+
+type Memory interface {
+	Add(input, output string)
+	Get() []MemoryItem
+	Clear()
+}
+
+type MemoryItem struct {
+	Timestamp time.Time `json:"timestamp"`
+	Input     string    `json:"input"`
+	Output    string    `json:"output"`
+}
+
+type SimpleMemory struct {
+	items []MemoryItem
+	size  int
+}
+
+func NewSimpleMemory(size int) *SimpleMemory {
+	return &SimpleMemory{
+		items: make([]MemoryItem, 0, size),
+		size:  size,
+	}
+}
+
+func (m *SimpleMemory) Add(input, output string) {
+	item := MemoryItem{
+		Timestamp: time.Now(),
+		Input:     input,
+		Output:    output,
+	}
+	if len(m.items) >= m.size {
+		m.items = m.items[1:]
+	}
+	m.items = append(m.items, item)
+}
+
+func (m *SimpleMemory) Get() []MemoryItem {
+	return m.items
+}
+
+func (m *SimpleMemory) Clear() {
+	m.items = make([]MemoryItem, 0, m.size)
+}
 
 // WithAgentDebug enables or disables debug mode for the Agent
 func WithAgentDebug(debug bool) AgentOption {
@@ -174,6 +219,13 @@ func WithAgentCallback(callback AgentCallback) AgentOption {
 	}
 }
 
+// Add this new option function
+func WithAgentMemory(memory Memory) AgentOption {
+	return func(a *Agent) {
+		a.memory = memory
+	}
+}
+
 func NewAgent(client *OpenAIClient, toolExecutor ToolExecutor, options ...AgentOption) *Agent {
 	agent := &Agent{
 		client:        client,
@@ -185,6 +237,7 @@ func NewAgent(client *OpenAIClient, toolExecutor ToolExecutor, options ...AgentO
 		debug:         false,
 		eventChan:     make(chan Event, EventChannelBufferSize),
 		name:          "default",
+		memory:        NewSimpleMemory(10), // Default memory size of 10
 	}
 
 	for _, option := range options {
@@ -240,7 +293,14 @@ func WithAgentName(name string) AgentOption {
 }
 
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
-	a.messageHistory = append(a.messageHistory, ChatCompletionMessage{Role: RoleUser, Content: userInput})
+	// Add memory context to the system prompt
+	memoryContext := a.getMemoryContext()
+	systemPromptWithMemory := a.systemPrompt + "\n\nPrevious conversation context:\n" + memoryContext
+
+	a.messageHistory = []ChatCompletionMessage{
+		{Role: RoleSystem, Content: systemPromptWithMemory},
+		{Role: RoleUser, Content: userInput},
+	}
 
 	for i := 0; i < a.maxIterations; i++ {
 		response, err := a.getCompletion(ctx)
@@ -252,6 +312,8 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 		a.messageHistory = append(a.messageHistory, response.Choices[0].Message)
 
 		if len(a.tools) == 0 || response.Choices[0].FinishReason != FinishReasonToolCalls {
+			// Store the conversation in memory
+			a.memory.Add(userInput, content)
 			return content, nil
 		}
 
@@ -549,4 +611,12 @@ func (a *Agent) CollaborateWithAgents(ctx context.Context, query string, agents 
 	}
 
 	return "", fmt.Errorf("max iterations reached without resolution")
+}
+
+func (a *Agent) getMemoryContext() string {
+	var context strings.Builder
+	for _, item := range a.memory.Get() {
+		context.WriteString(fmt.Sprintf("User: %s\nAssistant: %s\n\n", item.Input, item.Output))
+	}
+	return context.String()
 }
