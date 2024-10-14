@@ -81,13 +81,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - xsupabase
   - [ ] Improve request parameter logging for Supabase operations
 
-- Unit tests to fix:
-  - [ ] xd
-  - [ ] xlog
-  - [ ] xmw
-  - [ ] xsqlbuilder
-  - [ ] xsched
-  - [ ] xvalidator
 
 ## Acknowledgments 🙏
 
