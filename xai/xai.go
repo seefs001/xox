@@ -17,31 +17,22 @@ import (
 	"github.com/seefs001/xox/xlog"
 )
 
-// OpenAIClient represents a client for interacting with the OpenAI API
-type OpenAIClient struct {
-	baseURL    string
-	apiKey     string
-	httpClient *xhttpc.Client
-	model      string
-	debug      bool
-}
-
 // OpenAIClientOption is a function type for configuring the OpenAIClient
 type OpenAIClientOption func(*OpenAIClient)
 
 // TextGenerationOptions contains options for generating text
 type TextGenerationOptions struct {
-	Model        string    `json:"model"`
-	Prompt       string    `json:"prompt"`
-	SystemPrompt string    `json:"system"`
-	Messages     []Message `json:"messages"`
-	IsStreaming  bool      `json:"stream"`
-	ObjectSchema string    `json:"object_schema"`
-	Temperature  float64   `json:"temperature,omitempty"`
-	MaxTokens    int       `json:"max_tokens,omitempty"`
-	TopP         float64   `json:"top_p,omitempty"`
-	N            int       `json:"n,omitempty"`
-	ChunkSize    int       `json:"chunk_size,omitempty"`
+	Model        string                  `json:"model"`
+	Prompt       string                  `json:"prompt"`
+	SystemPrompt string                  `json:"system"`
+	Messages     []ChatCompletionMessage `json:"messages"`
+	IsStreaming  bool                    `json:"stream"`
+	ObjectSchema string                  `json:"object_schema"`
+	Temperature  float64                 `json:"temperature,omitempty"`
+	MaxTokens    int                     `json:"max_tokens,omitempty"`
+	TopP         float64                 `json:"top_p,omitempty"`
+	N            int                     `json:"n,omitempty"`
+	ChunkSize    int                     `json:"chunk_size,omitempty"`
 }
 
 // Message represents a single message in a conversation
@@ -59,29 +50,6 @@ type ChatCompletionResponse struct {
 	ModelName  string   `json:"model"`
 	UsageInfo  Usage    `json:"usage"`
 	Choices    []Choice `json:"choices"`
-}
-
-// Usage represents the token usage information
-type Usage struct {
-	PromptTokenCount     int `json:"prompt_tokens"`
-	CompletionTokenCount int `json:"completion_tokens"`
-	TotalTokenCount      int `json:"total_tokens"`
-}
-
-// Choice represents a single choice in the API response
-type Choice struct {
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-	Index        int     `json:"index"`
-}
-
-// StreamResponse represents a single chunk of the streaming response
-type StreamResponse struct {
-	ID         string         `json:"id"`
-	ObjectType string         `json:"object"`
-	CreatedAt  int64          `json:"created"`
-	ModelName  string         `json:"model"`
-	Choices    []StreamChoice `json:"choices"`
 }
 
 // StreamChoice represents a single choice in the streaming response
@@ -158,10 +126,6 @@ const (
 
 // API endpoints
 const (
-	DefaultBaseURL        = "https://api.openai.com"
-	ChatCompletionsURL    = "/v1/chat/completions"
-	EmbeddingsURL         = "/v1/embeddings"
-	ImageGenerationURL    = "/v1/images/generations"
 	MidjourneyURL         = "/mj/submit/imagine"
 	MidjourneyStatusURL   = "/mj/task/{id}/fetch"
 	MidjourneyActionURL   = "/mj/submit/action"
@@ -208,10 +172,17 @@ func WithModel(model string) OpenAIClientOption {
 	}
 }
 
-// WithDebug enables or disables debug mode
+// WithDebug enables or disables debug mode for the OpenAI client
 func WithDebug(debug bool) OpenAIClientOption {
 	return func(c *OpenAIClient) {
 		c.debug = debug
+	}
+}
+
+// WithHttpClientDebug enables or disables debug mode for the HTTP client
+func WithHttpClientDebug(debug bool) OpenAIClientOption {
+	return func(c *OpenAIClient) {
+		c.httpClient.SetDebug(debug)
 	}
 }
 
@@ -232,10 +203,6 @@ func NewOpenAIClient(options ...OpenAIClientOption) *OpenAIClient {
 		option(client)
 	}
 	client.baseURL = processBaseURL(client.baseURL)
-
-	if client.debug {
-		client.httpClient.SetDebug(true)
-	}
 
 	return client
 }
@@ -288,7 +255,7 @@ func (c *OpenAIClient) GenerateText(ctx context.Context, options TextGenerationO
 		"stream":      options.IsStreaming,
 	})
 
-	resp, err := c.sendRequest(ctx, http.MethodPost, ChatCompletionsURL, requestBody, false)
+	resp, err := c.sendRequest(ctx, http.MethodPost, ChatCompletionsEndpoint, requestBody, false)
 	if err != nil {
 		return "", xerror.Wrap(err, "failed to send request")
 	}
@@ -337,7 +304,7 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 			"n":           options.N,
 		})
 
-		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsURL, requestBody, xhttpc.WithStreamContentType("application/json"))
+		responseChan, responseErrChan := c.httpClient.StreamResponse(ctx, http.MethodPost, c.baseURL+ChatCompletionsEndpoint, requestBody, xhttpc.WithStreamContentType("application/json"))
 
 		buffer := strings.Builder{}
 		lastOutputTime := time.Now()
@@ -363,7 +330,11 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 					errChan <- xerror.Wrap(err, "error in stream response")
 				}
 				return
-			case chunk := <-responseChan:
+			case chunk, ok := <-responseChan:
+				if !ok {
+					flushBuffer()
+					return
+				}
 				line := strings.TrimSpace(string(chunk))
 				if line == "" || line == "data: [DONE]" {
 					flushBuffer()
@@ -376,15 +347,17 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 				}
 
 				data := strings.TrimPrefix(line, "data: ")
-				var streamResponse StreamResponse
+				var streamResponse ChatCompletionChunk
 				if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
 					flushBuffer()
 					errChan <- xerror.Wrap(err, "error unmarshaling stream data")
 					return
 				}
 
-				if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].Delta.Content != "" {
-					buffer.WriteString(streamResponse.Choices[0].Delta.Content)
+				if streamResponse.Response != nil &&
+					len(streamResponse.Response.Choices) > 0 &&
+					streamResponse.Response.Choices[0].Delta.Content != "" {
+					buffer.WriteString(streamResponse.Response.Choices[0].Delta.Content)
 					if buffer.Len() >= options.ChunkSize || time.Since(lastOutputTime) >= maxOutputInterval {
 						flushBuffer()
 					}
@@ -471,14 +444,14 @@ func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Resp
 			}
 
 			data := strings.TrimPrefix(line, "data: ")
-			var streamResponse StreamResponse
+			var streamResponse ChatCompletionChunk
 			if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
 				errChan <- xerror.Wrap(err, "error unmarshaling stream data")
 				return
 			}
 
-			if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].Delta.Content != "" {
-				buffer.WriteString(streamResponse.Choices[0].Delta.Content)
+			if len(streamResponse.Response.Choices) > 0 && streamResponse.Response.Choices[0].Delta.Content != "" {
+				buffer.WriteString(streamResponse.Response.Choices[0].Delta.Content)
 				if buffer.Len() > 0 {
 					select {
 					case textChan <- buffer.String():
@@ -496,7 +469,7 @@ func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Resp
 func (c *OpenAIClient) prepareTextGenerationOptions(prompt []string, options ...func(*TextGenerationOptions)) TextGenerationOptions {
 	opts := TextGenerationOptions{
 		Model:     c.model,
-		Messages:  []Message{},
+		Messages:  []ChatCompletionMessage{},
 		ChunkSize: DefaultChunkSize,
 	}
 
@@ -505,7 +478,7 @@ func (c *OpenAIClient) prepareTextGenerationOptions(prompt []string, options ...
 	}
 
 	if opts.SystemPrompt != "" {
-		opts.Messages = append(opts.Messages, Message{Role: MessageRoleSystem, Content: opts.SystemPrompt})
+		opts.Messages = append(opts.Messages, ChatCompletionMessage{Role: MessageRoleSystem, Content: opts.SystemPrompt})
 	}
 
 	for i, content := range prompt {
@@ -514,7 +487,7 @@ func (c *OpenAIClient) prepareTextGenerationOptions(prompt []string, options ...
 			role = MessageRoleAssistant
 		}
 
-		message := Message{Role: role}
+		message := ChatCompletionMessage{Role: role}
 		if x.IsImageURL(content) || x.IsBase64(content) {
 			message.Image = content
 		} else {
@@ -562,7 +535,7 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, input []string, mod
 		"input": input,
 	}
 
-	resp, err := c.sendRequest(ctx, http.MethodPost, EmbeddingsURL, requestBody, false)
+	resp, err := c.sendRequest(ctx, http.MethodPost, EmbeddingsEndpoint, requestBody, false)
 	if err != nil {
 		return nil, xerror.Wrap(err, "failed to send embedding request")
 	}
@@ -749,7 +722,7 @@ func (c *OpenAIClient) GenerateImage(ctx context.Context, prompt string, options
 		}
 	}
 
-	resp, err := c.sendRequest(ctx, http.MethodPost, ImageGenerationURL, requestBody, false)
+	resp, err := c.sendRequest(ctx, http.MethodPost, ImagesGenerationsEndpoint, requestBody, false)
 	if err != nil {
 		return nil, err
 	}

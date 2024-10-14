@@ -123,11 +123,13 @@ func log(level slog.Level, msg string, args ...any) {
 
 // ColorConsoleHandler implements a color console handler.
 type ColorConsoleHandler struct {
-	w      io.Writer
-	opts   *slog.HandlerOptions
-	attrs  []slog.Attr
-	groups []string
-	format string
+	w             io.Writer
+	opts          *slog.HandlerOptions
+	attrs         []slog.Attr
+	groups        []string
+	format        string
+	maxMessageLen int // 0 means no limit
+	maxAttrLen    int // 0 means no limit
 }
 
 // NewColorConsoleHandler creates a new ColorConsoleHandler.
@@ -138,10 +140,18 @@ func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) (*ColorConso
 		}
 	}
 	return &ColorConsoleHandler{
-		w:      w,
-		opts:   opts,
-		format: "%s[%l] [%t] %m%a", // Default format: source [level] [time] message attributes
+		w:             w,
+		opts:          opts,
+		format:        "%s[%l] [%t] %m%a", // Default format: source [level] [time] message attributes
+		maxMessageLen: 0,                  // Default to no limit
+		maxAttrLen:    0,                  // Default to no limit
 	}, nil
+}
+
+// SetMaxLengths sets the maximum lengths for message and attributes.
+func (h *ColorConsoleHandler) SetMaxLengths(maxMessageLen, maxAttrLen int) {
+	h.maxMessageLen = maxMessageLen
+	h.maxAttrLen = maxAttrLen
 }
 
 // SetFormat sets the log format for ColorConsoleHandler.
@@ -174,9 +184,10 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	var source string
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "source" {
-			source = fmt.Sprintf("[%s] ", a.Value.String())
+			source = a.Value.String()
 		} else {
-			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
+			attrStr := fmt.Sprintf("%s=%v", a.Key, a.Value.Any())
+			attrs = append(attrs, attrStr)
 		}
 		return true
 	})
@@ -192,11 +203,7 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	// Format the log message
-	logMsg := strings.ReplaceAll(h.format, "%s", source)
-	logMsg = strings.ReplaceAll(logMsg, "%l", level)
-	logMsg = strings.ReplaceAll(logMsg, "%t", timeStr)
-	logMsg = strings.ReplaceAll(logMsg, "%m", prefix+msg)
-	logMsg = strings.ReplaceAll(logMsg, "%a", attrStr)
+	logMsg := fmt.Sprintf("[%s] [%s] [%s] %s%s%s", source, level, timeStr, prefix, msg, attrStr)
 
 	_, err := fmt.Fprintln(h.w, logMsg)
 	return xerror.Wrap(err, "failed to write log message")
@@ -229,6 +236,20 @@ func SetConsoleFormat(format string) {
 		for _, handler := range mh.handlers {
 			if h, ok := handler.(*ColorConsoleHandler); ok {
 				h.SetFormat(format)
+				break
+			}
+		}
+	}
+}
+
+// SetConsoleMaxLengths sets the maximum lengths for message and attributes in the console handler
+func SetConsoleMaxLengths(maxMessageLen, maxAttrLen int) {
+	if h, ok := defaultHandler.(*ColorConsoleHandler); ok {
+		h.SetMaxLengths(maxMessageLen, maxAttrLen)
+	} else if mh, ok := defaultHandler.(*MultiHandler); ok {
+		for _, handler := range mh.handlers {
+			if h, ok := handler.(*ColorConsoleHandler); ok {
+				h.SetMaxLengths(maxMessageLen, maxAttrLen)
 				break
 			}
 		}
@@ -636,4 +657,76 @@ func (h *RotatingFileHandler) Rotate() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.rotate()
+}
+
+// ColorLog logs a message with a custom color.
+func ColorLog(level slog.Level, color xcolor.ColorCode, msg string, args ...any) {
+	coloredMsg := xcolor.Colorize(color, msg)
+	log(level, coloredMsg, args...)
+}
+
+// ColorLogf logs a formatted message with a custom color.
+func ColorLogf(level slog.Level, color xcolor.ColorCode, format string, args ...any) {
+	coloredMsg := xcolor.Colorize(color, fmt.Sprintf(format, args...))
+	log(level, coloredMsg)
+}
+
+// RedLog logs a message in red.
+func RedLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Red, msg, args...)
+}
+
+// RedLogf logs a formatted message in red.
+func RedLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Red, format, args...)
+}
+
+// GreenLog logs a message in green.
+func GreenLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Green, msg, args...)
+}
+
+// GreenLogf logs a formatted message in green.
+func GreenLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Green, format, args...)
+}
+
+// YellowLog logs a message in yellow.
+func YellowLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Yellow, msg, args...)
+}
+
+// YellowLogf logs a formatted message in yellow.
+func YellowLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Yellow, format, args...)
+}
+
+// BlueLog logs a message in blue.
+func BlueLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Blue, msg, args...)
+}
+
+// BlueLogf logs a formatted message in blue.
+func BlueLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Blue, format, args...)
+}
+
+// PurpleLog logs a message in purple.
+func PurpleLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Purple, msg, args...)
+}
+
+// PurpleLogf logs a formatted message in purple.
+func PurpleLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Purple, format, args...)
+}
+
+// CyanLog logs a message in cyan.
+func CyanLog(level slog.Level, msg string, args ...any) {
+	ColorLog(level, xcolor.Cyan, msg, args...)
+}
+
+// CyanLogf logs a formatted message in cyan.
+func CyanLogf(level slog.Level, format string, args ...any) {
+	ColorLogf(level, xcolor.Cyan, format, args...)
 }

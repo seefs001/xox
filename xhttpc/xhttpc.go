@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultTimeout               = 10 * time.Second
+	defaultTimeout               = 300 * time.Second
 	defaultDialTimeout           = 5 * time.Second
 	defaultKeepAlive             = 30 * time.Second
 	defaultMaxIdleConns          = 100
