@@ -7,7 +7,6 @@
 # xox 🧰
 
 xox is a comprehensive Golang utility package that aggregates multiple sub-packages, each designed to provide specific functionalities without introducing third-party dependencies. Inspired by various sources, xox aims to streamline everyday development tasks with clean and efficient solutions.
-
 ## Features 🌟
 
 - **No third-party dependencies**: All functionalities are implemented using the Golang standard library.
@@ -39,6 +38,7 @@ xox is a comprehensive Golang utility package that aggregates multiple sub-packa
 | [xtelebot](https://github.com/seefs001/xox/tree/master/xtelebot)   | Telegram bot API integration                         | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xtelebot_example) | 🚧 To be added | [Docs](https://github.com/seefs001/xox/tree/master/xtelebot) |
 | [xvalidator](https://github.com/seefs001/xox/tree/master/xvalidator) | Data validation utilities                            | ⚠️ Known Issues|                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xvalidator/xvalidator_test.go) | [Docs](https://github.com/seefs001/xox/tree/master/xvalidator) |
 | [xtime](https://github.com/seefs001/xox/tree/master/xtime)      | Time handling utilities                              | 🚧 Alpha       |                                                                        | [Test](https://github.com/seefs001/xox/blob/master/xtime/xtime_test.go) | [Docs](https://github.com/seefs001/xox/tree/master/xtime) |
+| [xresend](https://github.com/seefs001/xox/tree/master/xresend)  | Go client for Resend API                             | 🚧 Alpha       | [Example](https://github.com/seefs001/xox/tree/master/examples/xresend_example) |  | [Docs](https://github.com/seefs001/xox/tree/master/xresend) |
 
 ## Usage 🚀
 
@@ -77,12 +77,6 @@ While this package is primarily for personal use, contributions are welcome. Ple
 ## License 📄
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## TODO 📝
-
-- xsupabase
-  - [ ] Improve request parameter logging for Supabase operations
-
 
 ## Acknowledgments 🙏
 

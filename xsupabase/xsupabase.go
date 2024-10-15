@@ -119,6 +119,11 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 	var resp *http.Response
 	var err error
 
+	// Log request details
+	if c.debug {
+		logRequest(method, url, body)
+	}
+
 	operation := func() error {
 		switch method {
 		case http.MethodGet:
@@ -156,11 +161,52 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 		supaResp.Error = &errResp
 	}
 
+	// Log response details
+	if c.debug {
+		logResponse(supaResp)
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return supaResp, xerror.NewWithCode(fmt.Sprintf("API error: %s (code: %v, error_code: %s)", errResp.Message, errResp.Code, errResp.ErrorCode), resp.StatusCode)
 	}
 
 	return supaResp, nil
+}
+
+// logRequest logs the details of the request
+func logRequest(method, url string, body interface{}) {
+	xlog.Debug("Supabase Request",
+		"method", method,
+		"url", url,
+		"body", formatRequestBody(body),
+	)
+}
+
+// logResponse logs the details of the response
+func logResponse(resp *SupabaseResponse) {
+	xlog.Debug("Supabase Response",
+		"status", resp.Status,
+		"body", string(resp.Data),
+		"error", resp.Error,
+	)
+}
+
+// formatRequestBody formats the request body for logging
+func formatRequestBody(body interface{}) string {
+	if body == nil {
+		return "nil"
+	}
+
+	switch v := body.(type) {
+	case io.Reader:
+		return "io.Reader (content not shown)"
+	default:
+		jsonBody, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("error marshaling body: %v", err)
+		}
+		return string(jsonBody)
+	}
 }
 
 // BuildQueryString constructs a query string from QueryParams
