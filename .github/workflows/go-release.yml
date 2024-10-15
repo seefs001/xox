@@ -2,11 +2,11 @@
 name: goreleaser
 
 on:
-  # pull_request:
   push:
-    # run only against tags
-    tags:
-      - "*"
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
 
 permissions:
   contents: write
@@ -15,7 +15,31 @@ permissions:
   # id-token: write
 
 jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit message
+        id: check
+        run: |
+          commit_message=$(git log -1 --pretty=%B)
+          if [[ $commit_message =~ ^release\(v[0-9]+\.[0-9]+\.[0-9]+\) ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            version=$(echo $commit_message | sed -n 's/^release(\(v[0-9]\+\.[0-9]\+\.[0-9]\+\)).*$/\1/p')
+            echo "version=$version" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
   goreleaser:
+    needs: check-commit
+    if: needs.check-commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,14 +50,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: stable
-      # More assembly might be required: Docker logins, GPG, etc.
-      # It all depends on your needs.
+      - name: Create release tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag ${{ needs.check-commit.outputs.version }}
+          git push origin ${{ needs.check-commit.outputs.version }}
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
-          # 'latest', 'nightly', or a semver
           version: "latest"
           args: release --clean
         env:
