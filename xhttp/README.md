@@ -12,6 +12,9 @@ xhttp is a powerful and flexible HTTP library for Go that provides a high-level 
 - Middleware support
 - IP address handling
 - Basic authentication helper
+- Cookie management
+- Redirection support
+- Custom response writer
 
 ## Installation
 
@@ -56,8 +59,8 @@ func main() {
 - `GetParamBool(key string) bool`: Get a URL query parameter as a boolean
 - `GetParamUint(key string) (uint, error)`: Get a URL query parameter as an unsigned integer
 - `GetParamUint64(key string) (uint64, error)`: Get a URL query parameter as a uint64
-- `GetParamDuration(key string) (time.Duration, error)`: Get a URL query parameter as a time.Duration
-- `GetParamTime(key, layout string) (time.Time, error)`: Get a URL query parameter as a time.Time
+- `GetParamDuration(key string) (time.Duration, error)`: Get a URL parameter as a time.Duration
+- `GetParamTime(key, layout string) (time.Time, error)`: Get a URL parameter as a time.Time
 - `GetHeader(key string) string`: Get a request header
 - `GetBody(v interface{}) error`: Decode the request body into a struct
 - `GetBodyRaw() ([]byte, error)`: Get the raw request body
@@ -83,6 +86,7 @@ func main() {
 - `StreamFile(filepath string) error`: Stream a file as the response
 - `Redirect(code int, url string)`: Send a redirect response
 - `SetCookie(cookie *http.Cookie)`: Set a cookie
+- `GetCookie(name string) (*http.Cookie, error)`: Get a cookie
 
 #### Data Binding
 
@@ -127,7 +131,7 @@ router := xhttp.NewRouterWithMiddleware(loggingMiddleware)
 - `ListenAndServe(addr string, handler http.Handler) error`: Start an HTTP server
 - `ListenAndServeTLS(addr, certFile, keyFile string, handler http.Handler) error`: Start an HTTPS server
 
-## Example
+## Comprehensive Example
 
 Here's a more comprehensive example demonstrating various features of xhttp:
 
@@ -135,50 +139,130 @@ Here's a more comprehensive example demonstrating various features of xhttp:
 package main
 
 import (
-    "github.com/seefs001/xox/xhttp"
+    "fmt"
     "log"
     "net/http"
     "time"
+
+    "github.com/seefs001/xox/xhttp"
+    "github.com/seefs001/xox/xlog"
+    "github.com/seefs001/xox/xmw"
 )
 
-type User struct {
-    Name  string `json:"name" form:"name"`
-    Email string `json:"email" form:"email"`
+func UserHandler(c *xhttp.Context) {
+    userID := c.GetParam("id")
+    if userID == "" {
+        c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing user ID"})
+        return
+    }
+
+    user := map[string]string{
+        "id":   userID,
+        "name": fmt.Sprintf("User %s", userID),
+    }
+
+    c.JSON(http.StatusOK, user)
+}
+
+func HeaderEchoHandler(c *xhttp.Context) {
+    headers := make(map[string]string)
+    for key, values := range c.Request.Header {
+        headers[key] = values[0]
+    }
+
+    c.JSON(http.StatusOK, headers)
+}
+
+func ParamHandler(c *xhttp.Context) {
+    id, err := c.GetParamInt("id")
+    if err != nil {
+        c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
+        return
+    }
+
+    score, err := c.GetParamFloat("score")
+    if err != nil {
+        c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid score"})
+        return
+    }
+
+    c.JSON(http.StatusOK, map[string]interface{}{
+        "id":    id,
+        "score": score,
+    })
+}
+
+func BodyHandler(c *xhttp.Context) {
+    var data map[string]interface{}
+    if err := c.GetBody(&data); err != nil {
+        c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+        return
+    }
+
+    c.JSON(http.StatusOK, data)
+}
+
+func CookieHandler(c *xhttp.Context) {
+    cookie := &http.Cookie{
+        Name:    "example",
+        Value:   "test",
+        Expires: time.Now().Add(24 * time.Hour),
+    }
+    c.SetCookie(cookie)
+
+    retrievedCookie, err := c.GetCookie("example")
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve cookie"})
+        return
+    }
+
+    c.JSON(http.StatusOK, map[string]string{"cookie_value": retrievedCookie.Value})
 }
 
 func main() {
-    router := xhttp.NewRouter()
+    xlog.Info("Starting xhttp example server")
 
-    router.HandleFunc("/users", xhttp.Wrap(func(c *xhttp.Context) {
-        var user User
-        if err := c.Bind(&user); err != nil {
-            c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-            return
-        }
+    mux := http.NewServeMux()
 
-        // Process the user...
+    mux.HandleFunc("/user", xhttp.Wrap(UserHandler))
+    mux.HandleFunc("/echo-headers", xhttp.Wrap(HeaderEchoHandler))
+    mux.HandleFunc("/params", xhttp.Wrap(ParamHandler))
+    mux.HandleFunc("/body", xhttp.Wrap(BodyHandler))
+    mux.HandleFunc("/cookie", xhttp.Wrap(CookieHandler))
 
-        c.JSON(http.StatusOK, user)
-    }))
+    middlewareStack := []xmw.Middleware{
+        xmw.Logger(xmw.LoggerConfig{
+            Output:   log.Writer(),
+            UseColor: true,
+        }),
+        xmw.Recover(xmw.RecoverConfig{
+            EnableStackTrace: true,
+        }),
+        xmw.Timeout(xmw.TimeoutConfig{
+            Timeout: 5 * time.Second,
+        }),
+        xmw.CORS(xmw.CORSConfig{
+            AllowOrigins: []string{"*"},
+            AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+        }),
+        xmw.Compress(xmw.CompressConfig{
+            Level: 5,
+        }),
+    }
 
-    router.HandleFunc("/time", xhttp.Wrap(func(c *xhttp.Context) {
-        layout := c.GetParam("layout")
-        if layout == "" {
-            layout = time.RFC3339
-        }
+    handler := xmw.Use(mux, middlewareStack...)
 
-        c.String(http.StatusOK, time.Now().Format(layout))
-    }))
-
-    router.HandleFunc("/download", xhttp.Wrap(func(c *xhttp.Context) {
-        err := c.StreamFile("path/to/file.pdf")
-        if err != nil {
-            c.String(http.StatusInternalServerError, "Error streaming file: %v", err)
-        }
-    }))
-
-    log.Fatal(xhttp.ListenAndServe(":8080", router))
+    xlog.Info("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", handler))
 }
 ```
 
-This example demonstrates request binding, parameter parsing, JSON responses, string responses, and file streaming.
+This example demonstrates how to use various features of xhttp, including parameter parsing, JSON responses, cookie handling, and integration with middleware from the xmw package.
+
+## Contributing
+
+Contributions to xhttp are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License.

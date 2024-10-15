@@ -11,6 +11,9 @@ XSB is a powerful and flexible SQL query builder for Go, designed to simplify th
 - Transaction support
 - Query debugging and explanation
 - Sanitization of user inputs
+- Advanced features like CTEs, UPSERTs, and recursive queries
+- Pagination support
+- Increment and decrement operations
 
 ## Installation
 
@@ -156,6 +159,99 @@ query, args := builder.Build()
 // args: [1]
 ```
 
+## Advanced Features
+
+### Upsert (PostgreSQL)
+
+```go
+builder := xsb.New().
+    WithDialect(xsb.PostgreSQL).
+    Table("users").
+    Columns("id", "name", "email").
+    Values(1, "John Doe", "john@example.com").
+    Upsert([]string{"id"}, []xsb.UpdateClause{
+        {Column: "name", Value: "John Doe Updated"},
+        {Column: "email", Value: "john_updated@example.com"},
+    })
+
+query, args := builder.BuildInsert()
+// query: INSERT INTO users (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $4, email = $5 RETURNING id
+// args: [1, "John Doe", "john@example.com", "John Doe Updated", "john_updated@example.com"]
+```
+
+### On Duplicate Key Update (MySQL)
+
+```go
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
+    Table("users").
+    Columns("id", "name", "email").
+    Values(1, "John Doe", "john@example.com").
+    OnDuplicateKeyUpdate([]xsb.UpdateClause{
+        {Column: "name", Value: "John Doe Updated"},
+        {Column: "email", Value: "john_updated@example.com"},
+    })
+
+query, args := builder.BuildInsert()
+// query: INSERT INTO users (id, name, email) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = ?, email = ?
+// args: [1, "John Doe", "john@example.com", "John Doe Updated", "john_updated@example.com"]
+```
+
+### Recursive CTE
+
+```go
+cte := xsb.New().
+    WithDialect(xsb.PostgreSQL).
+    Table("employees").
+    Columns("id", "name", "manager_id").
+    Union(xsb.New().
+        WithDialect(xsb.PostgreSQL).
+        Table("employees e").
+        InnerJoin("cte c", "e.manager_id = c.id").
+        Columns("e.id", "e.name", "e.manager_id"))
+
+builder := xsb.New().
+    WithDialect(xsb.PostgreSQL).
+    WithRecursive("cte", cte).
+    Table("cte").
+    Columns("id", "name", "manager_id").
+    Where("id = ?", 1)
+
+query, args := builder.Build()
+// query: WITH RECURSIVE cte AS (SELECT id, name, manager_id FROM employees UNION SELECT e.id, e.name, e.manager_id FROM employees e INNER JOIN cte c ON e.manager_id = c.id) SELECT id, name, manager_id FROM cte WHERE id = ?
+// args: [1]
+```
+
+### Increment and Decrement
+
+```go
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
+    Table("products").
+    Increment("stock", 5).
+    Decrement("price", 2).
+    Where("id = ?", 1)
+
+query, args := builder.BuildUpdate()
+// query: UPDATE products SET stock = stock + 5, price = price - 2 WHERE id = ?
+// args: [1]
+```
+
+### Pagination
+
+```go
+builder := xsb.New().
+    WithDialect(xsb.MySQL).
+    Table("users").
+    Columns("id", "name").
+    OrderBy("id ASC").
+    Paginate(2, 10)
+
+query, args := builder.BuildSelect()
+// query: SELECT id, name FROM users ORDER BY id ASC LIMIT 10 OFFSET 10
+// args: []
+```
+
 ## API Reference
 
 ### New() *Builder
@@ -251,65 +347,42 @@ Adds EXPLAIN to the query for debugging purposes.
 ### Sanitize(input string) string
 Removes any potentially harmful SQL from the input.
 
-## Advanced Features
+### Increment(column string, amount int) *Builder
+Increments a column's value.
 
-### Upsert (PostgreSQL)
+### Decrement(column string, amount int) *Builder
+Decrements a column's value.
 
-```go
-builder := xsb.New().
-    WithDialect(xsb.PostgreSQL).
-    Table("users").
-    Columns("id", "name", "email").
-    Values(1, "John Doe", "john@example.com").
-    Upsert([]string{"id"}, []xsb.UpdateClause{
-        {Column: "name", Value: "John Doe Updated"},
-        {Column: "email", Value: "john_updated@example.com"},
-    })
+### Paginate(page, perPage int) *Builder
+Adds LIMIT and OFFSET for pagination.
 
-query, args := builder.BuildInsert()
-// query: INSERT INTO users (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $4, email = $5 RETURNING id
-// args: [1, "John Doe", "john@example.com", "John Doe Updated", "john_updated@example.com"]
-```
+### WhereExists(subquery *Builder) *Builder
+Adds a WHERE EXISTS subquery.
 
-### On Duplicate Key Update (MySQL)
+### WhereNotExists(subquery *Builder) *Builder
+Adds a WHERE NOT EXISTS subquery.
 
-```go
-builder := xsb.New().
-    WithDialect(xsb.MySQL).
-    Table("users").
-    Columns("id", "name", "email").
-    Values(1, "John Doe", "john@example.com").
-    OnDuplicateKeyUpdate([]xsb.UpdateClause{
-        {Column: "name", Value: "John Doe Updated"},
-        {Column: "email", Value: "john_updated@example.com"},
-    })
+### WithLock(lockType string) *Builder
+Adds a locking clause based on the dialect.
 
-query, args := builder.BuildInsert()
-// query: INSERT INTO users (id, name, email) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = ?, email = ?
-// args: [1, "John Doe", "john@example.com", "John Doe Updated", "john_updated@example.com"]
-```
+### InsertGetId(db *sql.DB) (int64, error)
+Performs an INSERT and returns the last inserted ID.
 
-### Recursive CTE
+## Best Practices
 
-```go
-cte := xsb.New().
-    WithDialect(xsb.PostgreSQL).
-    Table("employees").
-    Columns("id", "name", "manager_id").
-    Union(xsb.New().
-        WithDialect(xsb.PostgreSQL).
-        Table("employees e").
-        InnerJoin("cte c", "e.manager_id = c.id").
-        Columns("e.id", "e.name", "e.manager_id"))
+1. Always use placeholders for values in WHERE clauses to prevent SQL injection.
+2. Use transactions for operations that require multiple queries to be executed atomically.
+3. Use the Explain() method to debug and optimize your queries.
+4. Sanitize user inputs using the Sanitize() function before using them in your queries.
+5. Use the appropriate dialect for your database to ensure compatibility.
+6. Take advantage of subqueries and CTEs for complex queries.
+7. Use pagination for large result sets to improve performance.
+8. Use the WithLock() method when you need to ensure data consistency in concurrent scenarios.
 
-builder := xsb.New().
-    WithDialect(xsb.PostgreSQL).
-    WithRecursive("cte", cte).
-    Table("cte").
-    Columns("id", "name", "manager_id").
-    Where("id = ?", 1)
+## Contributing
 
-query, args := builder.Build()
-// query: WITH RECURSIVE cte AS (SELECT id, name, manager_id FROM employees UNION SELECT e.id, e.name, e.manager_id FROM employees e INNER JOIN cte c ON e.manager_id = c.id) SELECT id, name, manager_id FROM cte WHERE id = ?
-// args: [1]
-```
+Contributions to XSB are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

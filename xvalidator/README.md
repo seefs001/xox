@@ -8,8 +8,11 @@ xvalidator is a powerful and flexible struct validation library for Go. It provi
 - Supports various data types including strings, numbers, slices, and time.Time
 - Customizable error messages
 - Easy to extend with custom validators
+- Thread-safe
 
 ## Installation
+
+To install xvalidator, use `go get`:
 
 ```bash
 go get github.com/seefs001/xox/xvalidator
@@ -145,3 +148,28 @@ if errors != nil {
 ```
 
 This example demonstrates a more complex password validation using a regular expression to ensure it contains at least one uppercase letter, one lowercase letter, one number, and one special character.
+
+## Performance Considerations
+
+- xvalidator uses reflection to validate struct fields, which may have a performance impact for large structs or high-frequency validations.
+- Consider caching validation results for static data or implementing custom validators for performance-critical scenarios.
+
+## Thread Safety
+
+The xvalidator package is designed to be thread-safe. All functions can be safely called from multiple goroutines concurrently.
+
+## Error Handling
+
+xvalidator returns a slice of `ValidationError` instances. Each error contains the field name and a descriptive message. Always check for errors and handle them appropriately in your application.
+
+## Extending xvalidator
+
+To add custom validation rules, you can modify the `applyValidator` function in the xvalidator package. Ensure that you follow the existing pattern and provide appropriate error messages.
+
+## Contributing
+
+Contributions to xvalidator are welcome! Please feel free to submit issues, fork the repository and send pull requests!
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

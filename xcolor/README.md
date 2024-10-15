@@ -9,6 +9,8 @@ xcolor is a Go package that provides easy-to-use color output functionality for 
 - Automatic color detection for terminals
 - Color stripping functionality
 - Rainbow text output
+- Multi-color and multi-style text formatting
+- Color output to specific io.Writer
 
 ## Installation
 
@@ -46,6 +48,9 @@ xcolor.PrintMulti([]xcolor.ColorCode{xcolor.Red, xcolor.Bold}, "Bold red text")
 
 // Get string with multiple colors/styles
 multiColored := xcolor.SprintMulti([]xcolor.ColorCode{xcolor.Blue, xcolor.Italic}, "Italic blue text")
+
+// Print multiple colors/styles with newline
+xcolor.PrintlnMulti([]xcolor.ColorCode{xcolor.Green, xcolor.Bold}, "Bold green text with newline")
 ```
 
 ### Rainbow Text
@@ -84,6 +89,13 @@ stripped := xcolor.StripColor("\033[31mRed text\033[0m")
 isTerm := xcolor.IsTerminal(os.Stdout.Fd())
 ```
 
+### Writing to Specific io.Writer
+
+```go
+// Write colored output to a specific io.Writer
+xcolor.Fprintf(os.Stderr, xcolor.Red, "This is an %s message", "error")
+```
+
 ## Available Colors and Styles
 
 - `Reset`
@@ -96,6 +108,7 @@ isTerm := xcolor.IsTerminal(os.Stdout.Fd())
 - `White`
 - `Bold`
 - `Italic`
+- `None` (can be used to skip coloring)
 
 ## Notes
 
@@ -103,6 +116,7 @@ isTerm := xcolor.IsTerminal(os.Stdout.Fd())
 - `AutoEnableColor()` can be used to automatically enable color based on terminal capability.
 - The `Rainbow` function cycles through colors for each character in the input string.
 - Use `StripColor` to remove ANSI color codes from strings.
+- The `None` color code can be used when you want to skip coloring for a specific part of the text.
 
 ## Example
 
@@ -111,6 +125,7 @@ package main
 
 import (
     "fmt"
+    "os"
     "github.com/seefs001/xox/xcolor"
 )
 
@@ -122,14 +137,19 @@ func main() {
 
     fmt.Println(xcolor.Sprint(xcolor.Green, "This is green text"))
 
-    xcolor.PrintMulti([]xcolor.ColorCode{xcolor.Yellow, xcolor.Bold}, "This is bold yellow text")
+    xcolor.PrintMulti([]xcolor.ColorCode{xcolor.Yellow, xcolor.Bold}, "This is bold yellow text\n")
 
     xcolor.PrintlnRainbow("This is a rainbow!")
 
     colorized := xcolor.Colorize(xcolor.Cyan, "Cyan text")
     stripped := xcolor.StripColor(colorized)
     fmt.Println("Stripped:", stripped)
+
+    xcolor.Fprintf(os.Stderr, xcolor.Purple, "This is a %s message\n", "purple")
+
+    multiStyled := xcolor.ColorizeMulti([]xcolor.ColorCode{xcolor.Red, xcolor.Bold, xcolor.Italic}, "Bold italic red text")
+    fmt.Println(multiStyled)
 }
 ```
 
-This example demonstrates various features of the xcolor package, including basic coloring, multi-color output, rainbow text, and color stripping.
+This example demonstrates various features of the xcolor package, including basic coloring, multi-color output, rainbow text, color stripping, and writing to specific io.Writer.

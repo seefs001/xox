@@ -10,6 +10,8 @@ XD is a powerful and flexible dependency injection container for Go applications
 - Thread-safe operations
 - Customizable logging
 - Easy cloning and clearing of containers
+- Recursive struct injection
+- Type-safe service retrieval using generics
 
 ## Installation
 
@@ -137,6 +139,49 @@ xd.SetLogger(func(format string, args ...any) {
 })
 ```
 
+## Advanced Features
+
+### Recursive Struct Injection
+
+XD supports recursive struct injection, allowing you to inject dependencies into nested structs:
+
+```go
+type NestedStruct struct {
+    Database *Database `xd:"-"`
+}
+
+type ParentStruct struct {
+    Nested *NestedStruct
+    Logger *Logger `xd:"-"`
+}
+
+parent := &ParentStruct{Nested: &NestedStruct{}}
+err := xd.InjectStruct(container, parent)
+// Both parent.Logger and parent.Nested.Database will be injected
+```
+
+### Circular Dependency Detection
+
+XD automatically detects circular dependencies during service creation and injection, preventing infinite loops:
+
+```go
+xd.Provide(container, func(c *xd.Container) (*ServiceA, error) {
+    b := xd.MustInvoke[*ServiceB](c)
+    return &ServiceA{B: b}, nil
+})
+
+xd.Provide(container, func(c *xd.Container) (*ServiceB, error) {
+    a := xd.MustInvoke[*ServiceA](c)
+    return &ServiceB{A: a}, nil
+})
+
+// Invoking either ServiceA or ServiceB will result in an error
+```
+
+### Thread-Safe Operations
+
+All operations in XD are thread-safe, allowing you to use the container in concurrent environments without additional synchronization.
+
 ## Best Practices
 
 1. Use `Provide` and `Invoke` for most scenarios.
@@ -144,6 +189,9 @@ xd.SetLogger(func(format string, args ...any) {
 3. Implement proper error handling, especially when using `Invoke` and `InjectStruct`.
 4. Use `MustInvoke` only when you're certain the service exists to avoid panics.
 5. Clear the container or use a new one for each test to ensure isolation.
+6. Use the `xd:"-"` tag to mark fields for injection.
+7. Consider using interfaces for better decoupling and easier testing.
+8. Avoid circular dependencies by redesigning your architecture if possible.
 
 ## Example
 
@@ -193,3 +241,11 @@ func main() {
 ```
 
 This example demonstrates how to set up a container, register services, and use struct injection to create a fully configured `Service` instance.
+
+## Contributing
+
+Contributions to XD are welcome! Please feel free to submit issues, fork the repository and send pull requests!
+
+## License
+
+XD is released under the MIT License. See the LICENSE file for details.

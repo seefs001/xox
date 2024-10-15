@@ -35,6 +35,14 @@ if err != nil {
     // handle error
 }
 fmt.Println(str) // Output: "123"
+
+// Converting a slice
+slice := []int{1, 2, 3}
+str, err = xcast.ToString(slice)
+if err != nil {
+    // handle error
+}
+fmt.Println(str) // Output: "1,2,3"
 ```
 
 ### ToInt
@@ -52,6 +60,13 @@ if err != nil {
     // handle error
 }
 fmt.Println(num) // Output: 123
+
+// Converting a boolean
+num, err = xcast.ToInt(true)
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 1
 ```
 
 ### ToInt32
@@ -62,12 +77,30 @@ Converts various types to an int32.
 func ToInt32(value any) (int32, error)
 ```
 
+Example:
+```go
+num, err := xcast.ToInt32(123.45)
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 123
+```
+
 ### ToInt64
 
 Converts various types to an int64.
 
 ```go
 func ToInt64(value any) (int64, error)
+```
+
+Example:
+```go
+num, err := xcast.ToInt64("9223372036854775807")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 9223372036854775807
 ```
 
 ### ToFloat64
@@ -85,6 +118,13 @@ if err != nil {
     // handle error
 }
 fmt.Println(num) // Output: 123.45
+
+// Converting an integer
+num, err = xcast.ToFloat64(123)
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 123.0
 ```
 
 ### ToBool
@@ -102,6 +142,13 @@ if err != nil {
     // handle error
 }
 fmt.Println(b) // Output: true
+
+// Converting an integer
+b, err = xcast.ToBool(1)
+if err != nil {
+    // handle error
+}
+fmt.Println(b) // Output: true
 ```
 
 ### ToMap
@@ -114,11 +161,25 @@ func ToMap(value any) (map[string]any, error)
 
 Example:
 ```go
-m, err := xcast.ToMap(struct{ Name string }{"John"})
+type Person struct {
+    Name string
+    Age  int
+}
+
+person := Person{Name: "John", Age: 30}
+m, err := xcast.ToMap(person)
 if err != nil {
     // handle error
 }
-fmt.Println(m) // Output: map[Name:John]
+fmt.Println(m) // Output: map[Name:John Age:30]
+
+// Converting a slice
+slice := []int{1, 2, 3}
+m, err = xcast.ToMap(slice)
+if err != nil {
+    // handle error
+}
+fmt.Println(m) // Output: map[0:1 1:2 2:3]
 ```
 
 ### ToSlice
@@ -131,11 +192,24 @@ func ToSlice(value any) ([]any, error)
 
 Example:
 ```go
-s, err := xcast.ToSlice([]int{1, 2, 3})
+m := map[string]int{"a": 1, "b": 2, "c": 3}
+s, err := xcast.ToSlice(m)
 if err != nil {
     // handle error
 }
 fmt.Println(s) // Output: [1 2 3]
+
+// Converting a struct
+type Person struct {
+    Name string
+    Age  int
+}
+person := Person{Name: "John", Age: 30}
+s, err = xcast.ToSlice(person)
+if err != nil {
+    // handle error
+}
+fmt.Println(s) // Output: [John 30]
 ```
 
 ### ConvertStruct
@@ -219,3 +293,11 @@ All functions in this package return an error as the second return value. Always
 ## Note
 
 This package uses reflection and type assertions internally. Be aware that this might have performance implications for large-scale operations or in performance-critical parts of your application.
+
+## Contributing
+
+Contributions to the xcast package are welcome! Please submit issues and pull requests on the GitHub repository.
+
+## License
+
+This package is released under the MIT License. See the LICENSE file for details.

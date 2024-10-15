@@ -5,7 +5,7 @@ xsupabase is a Go client library for interacting with Supabase, providing a conv
 ## Installation
 
 ```bash
-go get github.com/seefspkg/xsupabase
+go get github.com/seefs001/xox/xsupabase
 ```
 
 ## Usage
@@ -13,12 +13,24 @@ go get github.com/seefspkg/xsupabase
 ### Initializing the Client
 
 ```go
-import "github.com/seefspkg/xsupabase"
+import (
+	"github.com/seefs001/xox/xsupabase"
+	"github.com/seefs001/xox/xhttpc"
+)
 
-client := xsupabase.NewClient("https://your-project-url.supabase.co", "your-api-key")
-
-// Optional: Enable debug mode
-client.SetDebug(true)
+client := xsupabase.NewClient(
+	"https://your-project-url.supabase.co",
+	"your-api-key",
+	xhttpc.WithDebug(true),
+	xhttpc.WithLogOptions(xhttpc.LogOptions{
+		LogHeaders:      true,
+		LogBody:         true,
+		LogResponse:     true,
+		HeaderKeysToLog: []string{"Authorization", "apikey"},
+		MaxBodyLogSize:  300,
+	}),
+	xhttpc.WithTimeout(15*time.Second),
+)
 ```
 
 ### Database Operations
@@ -27,29 +39,29 @@ client.SetDebug(true)
 
 ```go
 records, err := client.Select(ctx, "your_table", xsupabase.QueryParams{
-    Select: "column1,column2",
-    Order:  "column1.asc",
-    Limit:  10,
-    Offset: 0,
-    Filter: "column1=eq.value",
+	Select: "column1,column2",
+	Order:  "column1.asc",
+	Limit:  10,
+	Offset: 0,
+	Filter: "column1=eq.value",
 })
 ```
 
 #### Insert Record
 
 ```go
-record := xsupabase.Record{
-    "column1": "value1",
-    "column2": 42,
+newRecord := xsupabase.Record{
+	"column1": "value1",
+	"column2": 42,
 }
-insertedRecord, err := client.Insert(ctx, "your_table", record)
+insertedRecord, err := client.Insert(ctx, "your_table", newRecord)
 ```
 
 #### Update Record
 
 ```go
 updates := xsupabase.Record{
-    "column1": "new_value",
+	"column1": "new_value",
 }
 updatedRecord, err := client.Update(ctx, "your_table", recordID, updates)
 ```
@@ -66,35 +78,13 @@ err := client.Delete(ctx, "your_table", recordID)
 count, err := client.Count(ctx, "your_table", "column1=eq.value")
 ```
 
-#### Upsert Records
-
-```go
-records := []xsupabase.Record{
-    {"id": 1, "name": "John"},
-    {"id": 2, "name": "Jane"},
-}
-upsertedRecords, err := client.Upsert(ctx, "your_table", records, "id")
-```
-
-#### Batch Operations
-
-```go
-operations := []map[string]interface{}{
-    {"method": "INSERT", "data": xsupabase.Record{"name": "John"}},
-    {"method": "UPDATE", "data": xsupabase.Record{"id": 1, "name": "Jane"}},
-}
-results, err := client.BatchOperation(ctx, "your_table", operations)
-```
-
 ### User Management
 
 #### Create User
 
 ```go
-user, err := client.CreateUser(ctx, "user@example.com", "password123",
-    xsupabase.WithUserMetadata(map[string]interface{}{"name": "John Doe"}),
-    xsupabase.WithPhone("+1234567890"),
-    xsupabase.WithEmailConfirmed(true),
+newUser, err := client.CreateUser(ctx, "user@example.com", "password123",
+	xsupabase.WithUserMetadata(map[string]interface{}{"name": "John Doe"}),
 )
 ```
 
@@ -107,9 +97,17 @@ user, err := client.GetUser(ctx, "user_id")
 #### Update User
 
 ```go
-updatedUser, err := client.UpdateUser(ctx, "user_id",
-    xsupabase.WithEmail("newemail@example.com"),
-    xsupabase.WithUserMetadataUpdate(map[string]interface{}{"age": 30}),
+updatedUser, err := client.UpdateUser(ctx, "user_id", func(updates map[string]interface{}) {
+	updates["user_metadata"] = map[string]interface{}{"name": "Updated Name"}
+})
+```
+
+#### List Users
+
+```go
+users, err := client.ListUsers(ctx,
+	xsupabase.WithPage(1),
+	xsupabase.WithPerPage(10),
 )
 ```
 
@@ -119,70 +117,32 @@ updatedUser, err := client.UpdateUser(ctx, "user_id",
 err := client.DeleteUser(ctx, "user_id")
 ```
 
-#### List Users
-
-```go
-users, err := client.ListUsers(ctx,
-    xsupabase.WithPage(1),
-    xsupabase.WithPerPage(20),
-    xsupabase.WithUserMetadataFilter("role", "admin"),
-)
-```
-
 ### Storage Operations
 
 #### Upload File
 
 ```go
-file, _ := os.Open("path/to/file.jpg")
+file, _ := os.Open("path/to/file.txt")
 defer file.Close()
-err := client.UploadFile(ctx, "bucket_name", "path/in/bucket/file.jpg", file)
-```
-
-#### Get Public URL
-
-```go
-url, err := client.GetStoragePublicURL(ctx, "bucket_name", "path/in/bucket/file.jpg")
-```
-
-#### Delete File
-
-```go
-err := client.DeleteFile(ctx, "bucket_name", "path/in/bucket/file.jpg")
+err := client.UploadFile(ctx, "bucket_name", "path/in/bucket/file.txt", file)
 ```
 
 #### List Files
 
 ```go
-files, err := client.ListFiles(ctx, "bucket_name", "path/prefix")
+files, err := client.ListFiles(ctx, "bucket_name", "prefix")
 ```
 
-#### Create Bucket
+#### Get Public URL
 
 ```go
-err := client.CreateBucket(ctx, "new_bucket", true)
+url := client.GetStoragePublicURL(ctx, "bucket_name", "path/in/bucket/file.txt")
 ```
 
-#### Delete Bucket
+#### Delete File
 
 ```go
-err := client.DeleteBucket(ctx, "bucket_name")
-```
-
-#### Get Bucket Details
-
-```go
-details, err := client.GetBucketDetails(ctx, "bucket_name")
-```
-
-#### Update Bucket Details
-
-```go
-updates := map[string]interface{}{
-    "public": false,
-    "file_size_limit": 100 * 1024 * 1024,
-}
-err := client.UpdateBucketDetails(ctx, "bucket_name", updates)
+err := client.DeleteFile(ctx, "bucket_name", "path/in/bucket/file.txt")
 ```
 
 ### Other Operations
@@ -191,8 +151,8 @@ err := client.UpdateBucketDetails(ctx, "bucket_name", updates)
 
 ```go
 params := map[string]interface{}{
-    "param1": "value1",
-    "param2": 42,
+	"param1": "value1",
+	"param2": 42,
 }
 result, err := client.ExecuteRPC(ctx, "function_name", params)
 ```
@@ -201,30 +161,18 @@ result, err := client.ExecuteRPC(ctx, "function_name", params)
 
 ```go
 query := `
-    query GetUser($id: UUID!) {
-        user(id: $id) {
-            id
-            name
-            email
-        }
-    }
+	query GetUser($id: UUID!) {
+		user(id: $id) {
+			id
+			name
+			email
+		}
+	}
 `
 variables := map[string]interface{}{
-    "id": "user-uuid",
+	"id": "user-uuid",
 }
 result, err := client.ExecuteGraphQL(ctx, query, variables)
-```
-
-#### Invite User by Email
-
-```go
-err := client.InviteUserByEmail(ctx, "user@example.com", "admin")
-```
-
-#### Get Project Settings
-
-```go
-settings, err := client.GetProjectSettings(ctx)
 ```
 
 ## Error Handling
@@ -233,20 +181,25 @@ The library uses the `xerror` package for error handling. You can check for spec
 
 ```go
 if err != nil {
-    if xerror.IsCode(err, http.StatusNotFound) {
-        // Handle 404 error
-    } else {
-        // Handle other errors
-    }
+	if xerror.IsCode(err, http.StatusNotFound) {
+		// Handle 404 error
+	} else {
+		// Handle other errors
+	}
 }
 ```
 
 ## Debugging
 
-To enable debug logging:
+Debugging is enabled through the `xhttpc.WithDebug` option when creating the client:
 
 ```go
-client.SetDebug(true)
+client := xsupabase.NewClient(
+	supabaseURL,
+	supabaseKey,
+	xhttpc.WithDebug(true),
+	// ... other options
+)
 ```
 
 This will log detailed information about API calls and responses using the `xlog` package.
@@ -262,6 +215,114 @@ records, err := task.Wait()
 
 Similar methods exist for `AsyncInsert`, `AsyncUpdate`, and `AsyncDelete`.
 
-## Note on Real-time Subscriptions
+## Example
 
-The `SubscribeToChanges` method is currently a placeholder and not implemented. Real-time functionality may be added in future versions.
+Here's a comprehensive example demonstrating various features of xsupabase:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xenv"
+	"github.com/seefs001/xox/xhttpc"
+	"github.com/seefs001/xox/xlog"
+	"github.com/seefs001/xox/xsupabase"
+)
+
+func main() {
+	xenv.Load()
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	supabaseKey := os.Getenv("SUPABASE_API_KEY")
+
+	client := xsupabase.NewClient(
+		supabaseURL,
+		supabaseKey,
+		xhttpc.WithDebug(true),
+		xhttpc.WithLogOptions(xhttpc.LogOptions{
+			LogHeaders:      true,
+			LogBody:         true,
+			LogResponse:     true,
+			HeaderKeysToLog: []string{"Authorization", "apikey"},
+			MaxBodyLogSize:  300,
+		}),
+		xhttpc.WithTimeout(15*time.Second),
+	)
+
+	ctx := context.Background()
+
+	// Insert a new user
+	newUser := xsupabase.Record{
+		"name":  "John Doe",
+		"email": "john@example.com",
+	}
+	insertResp, err := client.Insert(ctx, "users", newUser)
+	if err != nil {
+		xlog.Error("Failed to insert user", "error", err)
+		return
+	}
+	xlog.Info("Inserted user", "response", insertResp)
+
+	// Select users
+	selectResp, err := client.Select(ctx, "users", xsupabase.QueryParams{})
+	if err != nil {
+		xlog.Error("Failed to select users", "error", err)
+		return
+	}
+	xlog.Info("Selected users", "response", selectResp)
+
+	// Update a user
+	if len(selectResp) > 0 {
+		userID := selectResp[0]["id"]
+		updateData := xsupabase.Record{
+			"name": "John Updated",
+		}
+		updateResp, err := client.Update(ctx, "users", userID, updateData)
+		if err != nil {
+			xlog.Error("Failed to update user", "error", err)
+			return
+		}
+		xlog.Info("Updated user", "response", updateResp)
+	}
+
+	// Count users
+	count, err := client.Count(ctx, "users", "")
+	if err != nil {
+		xlog.Error("Failed to count users", "error", err)
+		return
+	}
+	xlog.Info("User count", "count", count)
+
+	// Create a new user in the auth system
+	randomEmail := fmt.Sprintf("%s%d@example.com", x.Must1(x.RandomString(8, x.ModeAlpha)), x.Must1(x.RandomInt(100, 999)))
+	newAuthUser, err := client.CreateUser(ctx, randomEmail, "password123", xsupabase.WithUserMetadata(map[string]interface{}{"name": "New User"}))
+	if err != nil {
+		xlog.Error("Failed to create new auth user", "error", err)
+		return
+	}
+	xlog.Info("Created new auth user", "user", newAuthUser)
+
+	// List users
+	users, err := client.ListUsers(ctx, xsupabase.WithPage(1), xsupabase.WithPerPage(10))
+	if err != nil {
+		xlog.Error("Failed to list users", "error", err)
+		return
+	}
+	xlog.Info("Listed users", "count", len(users))
+}
+```
+
+This example demonstrates database operations, user management, and error handling using the xsupabase package.
+
+## Contributing
+
+Contributions to xsupabase are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

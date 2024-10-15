@@ -10,6 +10,10 @@
 - Streaming support for responses and Server-Sent Events (SSE)
 - Debug logging with customizable options
 - Easy-to-use fluent interface for request building
+- Context support for cancellation and timeouts
+- Automatic handling of base URLs
+- Custom header and cookie management
+- Proxy support
 
 ## Installation
 
@@ -208,6 +212,58 @@ For quick usage without creating a new client instance:
 ```go
 defaultClient := xhttpc.GetDefaultClient()
 resp, err := defaultClient.Get(context.Background(), "https://api.example.com/users")
+```
+
+## Additional Features
+
+### Setting Base URL
+
+```go
+client.SetBaseURL("https://api.example.com")
+// Now you can use relative paths in requests
+resp, err := client.Get(context.Background(), "/users")
+```
+
+### Adding Headers
+
+```go
+client.SetHeader("X-API-Key", "your-api-key")
+```
+
+### Adding Cookies
+
+```go
+client.AddCookie(&http.Cookie{Name: "session", Value: "123456"})
+```
+
+### Setting Query Parameters
+
+```go
+client.SetQueryParam("page", "1")
+client.SetQueryParam("limit", "10")
+```
+
+### Fluent Interface
+
+```go
+resp, err := client.
+    SetBaseURL("https://api.example.com").
+    SetHeader("X-API-Key", "your-api-key").
+    SetQueryParam("limit", "10").
+    Get(context.Background(), "/users")
+```
+
+### Automatic JSON Decoding
+
+```go
+var users []User
+err := client.GetJSONAndDecode(context.Background(), "/users", &users)
+```
+
+### Custom Content Type
+
+```go
+resp, err := client.Post(context.Background(), "/data", data, xhttpc.WithContentType("application/xml"))
 ```
 
 This README provides a comprehensive overview of the `xhttpc` package, including its main features, installation instructions, usage examples, and advanced configuration options. It covers the core functionality and demonstrates how to use the package effectively in various scenarios.

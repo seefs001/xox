@@ -796,6 +796,185 @@ if err != nil {
 fmt.Println(encoded) // Output: https://example.com/path?q=%E4%BD%A0%E5%A5%BD
 ```
 
+#### StringToBool
+
+```go
+func StringToBool(s string) bool
+```
+
+Converts a string to a boolean value.
+
+Example:
+```go
+fmt.Println(x.StringToBool("true"))  // Output: true
+fmt.Println(x.StringToBool("1"))     // Output: true
+fmt.Println(x.StringToBool("false")) // Output: false
+fmt.Println(x.StringToBool("0"))     // Output: false
+```
+
+#### StringToInt
+
+```go
+func StringToInt(s string) (int, error)
+```
+
+Converts a string to an integer.
+
+Example:
+```go
+num, err := x.StringToInt("42")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 42
+```
+
+#### StringToInt64
+
+```go
+func StringToInt64(s string) (int64, error)
+```
+
+Converts a string to an int64.
+
+Example:
+```go
+num, err := x.StringToInt64("9223372036854775807")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 9223372036854775807
+```
+
+#### StringToUint
+
+```go
+func StringToUint(s string) (uint, error)
+```
+
+Converts a string to an unsigned integer.
+
+Example:
+```go
+num, err := x.StringToUint("42")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 42
+```
+
+#### StringToUint64
+
+```go
+func StringToUint64(s string) (uint64, error)
+```
+
+Converts a string to a uint64.
+
+Example:
+```go
+num, err := x.StringToUint64("18446744073709551615")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 18446744073709551615
+```
+
+#### StringToFloat64
+
+```go
+func StringToFloat64(s string) (float64, error)
+```
+
+Converts a string to a float64.
+
+Example:
+```go
+num, err := x.StringToFloat64("3.14159")
+if err != nil {
+    // handle error
+}
+fmt.Println(num) // Output: 3.14159
+```
+
+#### StringToDuration
+
+```go
+func StringToDuration(s string) (time.Duration, error)
+```
+
+Converts a string to a time.Duration.
+
+Example:
+```go
+duration, err := x.StringToDuration("5m30s")
+if err != nil {
+    // handle error
+}
+fmt.Println(duration) // Output: 5m30s
+```
+
+#### StringToMap
+
+```go
+func StringToMap(s, pairSep, kvSep string) map[string]string
+```
+
+Converts a string to a map[string]string.
+
+Example:
+```go
+str := "key1=value1,key2=value2"
+m := x.StringToMap(str, ",", "=")
+fmt.Println(m) // Output: map[key1:value1 key2:value2]
+```
+
+#### BindData
+
+```go
+func BindData(v interface{}, data map[string][]string) error
+```
+
+Binds data from a map to a struct based on tags.
+
+Example:
+```go
+type User struct {
+    Name string `form:"name"`
+    Age  int    `form:"age"`
+}
+
+data := map[string][]string{
+    "name": {"John Doe"},
+    "age":  {"30"},
+}
+
+var user User
+err := x.BindData(&user, data)
+if err != nil {
+    // handle error
+}
+fmt.Printf("%+v\n", user) // Output: {Name:John Doe Age:30}
+```
+
+#### JSONToURLValues
+
+```go
+func JSONToURLValues(jsonStr string) (url.Values, error)
+```
+
+Converts a JSON string to url.Values.
+
+Example:
+```go
+jsonStr := `{"key1": "value1", "key2": ["value2", "value3"]}`
+values, err := x.JSONToURLValues(jsonStr)
+if err != nil {
+    // handle error
+}
+fmt.Println(values.Encode()) // Output: key1=value1&key2=value2&key2=value3
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

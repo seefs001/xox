@@ -92,6 +92,7 @@ Example:
 import (
     "fmt"
     "os"
+    "io/ioutil"
     "github.com/seefs001/xox/ximage"
 )
 
@@ -126,4 +127,26 @@ func main() {
 
 - For PNG images, the `quality` parameter is ignored, and default compression is applied.
 - If the compressed image exceeds the specified `maxSizeInMB`, the package will attempt to further reduce the quality of JPEG images to meet the size limit.
-- For unsupported image formats, the original data is returned without compression.
+- For unsupported image formats, an error will be returned.
+- The package uses the standard Go image libraries for decoding and encoding images.
+- Compression is lossy for JPEG images and lossless for PNG images.
+- The actual file size after compression may be slightly different from the specified `maxSizeInMB` due to the nature of image compression algorithms.
+
+## Performance Considerations
+
+- For large images or high volumes of images, consider using goroutines to process multiple images concurrently.
+- The compression process can be CPU-intensive, especially for large images or when trying to meet strict size limits.
+
+## Limitations
+
+- The package currently supports only JPEG and PNG formats. Other formats will result in an error.
+- There's no built-in progress reporting for long-running compressions.
+- The package does not preserve EXIF data or other metadata during compression.
+
+## Contributing
+
+Contributions to improve ximage are welcome. Please submit issues and pull requests on the GitHub repository.
+
+## License
+
+This package is distributed under the MIT license. See the LICENSE file for more details.

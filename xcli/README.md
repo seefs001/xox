@@ -5,22 +5,25 @@
 ## Features
 
 - Easy-to-use API for creating CLI applications
-- Support for commands and subcommands
+- Support for commands, subcommands, and aliases
 - Customizable flags for both the application and individual commands
 - Built-in help and version commands
-- Error handling and recovery
+- Error handling and recovery with custom error handlers
 - Colorized output
 - Debug mode for performance analysis
+- Before and after run hooks
+- Custom handlers for unknown commands
+- Command suggestions for misspelled commands
 
 ## Installation
 
 To install `xcli`, use the following command:
 
 ```bash
-go get github.com/seefs001/xox/seefspkg/xcli
+go get github.com/seefs001/xox/xcli
 ```
 
-## Usage
+## Basic Usage
 
 Here's a basic example of how to use `xcli`:
 
@@ -32,7 +35,7 @@ import (
     "fmt"
     "os"
 
-    "github.com/seefs001/xox/seefspkg/xcli"
+    "github.com/seefs001/xox/xcli"
 )
 
 func main() {
@@ -121,6 +124,17 @@ app.SetAfterRun(func(ctx context.Context, app *App) error {
 })
 ```
 
+#### (a *App) SetUnknownCommandHandler(handler func(ctx context.Context, cmdName string, args []string) error)
+
+Sets a custom handler for unknown commands.
+
+```go
+app.SetUnknownCommandHandler(func(ctx context.Context, cmdName string, args []string) error {
+    fmt.Printf("Unknown command: %s\n", cmdName)
+    return nil
+})
+```
+
 #### (a *App) Run(ctx context.Context, args []string) error
 
 Executes the application.
@@ -161,82 +175,57 @@ Enables or disables debug mode.
 xcli.EnableDebug(true)
 ```
 
-## Example
+## Advanced Features
 
-Here's a more comprehensive example demonstrating various features of `xcli`:
+### Subcommands
+
+You can create nested command structures using subcommands:
 
 ```go
-package main
+mathCmd := &xcli.Command{
+    Name:        "math",
+    Description: "Perform mathematical operations",
+    SubCommands: make(map[string]*xcli.Command),
+}
 
-import (
-    "context"
-    "fmt"
-    "os"
+mathCmd.SubCommands["add"] = &xcli.Command{
+    Name:        "add",
+    Description: "Add two numbers",
+    Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
+        // Implementation
+        return nil
+    },
+}
 
-    "github.com/seefs001/xox/seefspkg/xcli"
-)
+app.AddCommand(mathCmd)
+```
 
-func main() {
-    app := xcli.NewApp("myapp", "A sample CLI application", "1.0.0")
+### Custom Output
 
-    // Add a flag to the main application
-    verbose := app.Flags.Bool("verbose", false, "Enable verbose output")
+You can customize help and error output:
 
-    // Add a command
-    greetCmd := &xcli.Command{
-        Name:        "greet",
-        Description: "Greet the user",
-        Aliases:     []string{"g", "hello"},
-        Run: func(ctx context.Context, cmd *xcli.Command, args []string) error {
-            name := "user"
-            if len(args) > 0 {
-                name = args[0]
-            }
-            fmt.Printf("Hello, %s!\n", name)
-            if *verbose {
-                fmt.Println("Verbose mode enabled")
-            }
-            return nil
-        },
-    }
+```go
+app.CustomHelpPrinter = func(app *xcli.App) {
+    // Custom help printing logic
+}
 
-    // Add a flag to the greet command
-    greetCmd.Flags = flag.NewFlagSet("greet", flag.ExitOnError)
-    uppercase := greetCmd.Flags.Bool("uppercase", false, "Print greeting in uppercase")
+app.CustomErrorPrinter = func(err error) {
+    // Custom error printing logic
+}
 
-    app.AddCommand(greetCmd)
-
-    // Set custom error handler
-    app.SetErrorHandler(func(err error) {
-        fmt.Fprintf(os.Stderr, "An error occurred: %v\n", err)
-    })
-
-    // Enable debug mode
-    xcli.EnableDebug(true)
-
-    // Run the application
-    if err := app.Run(context.Background(), os.Args); err != nil {
-        os.Exit(1)
-    }
+app.CustomCommandHelpPrinter = func(app *xcli.App, cmdName string) {
+    // Custom command help printing logic
 }
 ```
 
-This example demonstrates:
-- Creating an application with a description and version
-- Adding a global flag
-- Creating a command with aliases and a local flag
-- Using a custom error handler
-- Enabling debug mode
+## Example
 
-To run the application:
+For a more comprehensive example demonstrating various features of `xcli`, please refer to the `examples/xcli_example/main.go` file in the repository.
 
-```bash
-# Run the greet command
-./myapp greet John
+## Contributing
 
-# Use an alias
-./myapp g John
+Contributions to `xcli` are welcome! Please feel free to submit issues, fork the repository and send pull requests.
 
-# Use flags
-./myapp --verbose greet John --uppercase
-```
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

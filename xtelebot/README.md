@@ -183,3 +183,11 @@ You can enable debug mode using the `WithDebug` option when creating a new bot. 
 3. Handle errors gracefully and consider implementing a custom error handler for better logging or recovery strategies.
 4. Use webhook mode in production for better performance and scalability.
 5. Implement proper security measures when using webhooks, such as HTTPS and secret tokens.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

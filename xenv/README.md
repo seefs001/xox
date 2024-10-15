@@ -9,6 +9,7 @@
 - Type-safe getters for various data types
 - Default values for missing environment variables
 - JSON parsing for complex data structures
+- Set and unset environment variables
 
 ## Installation
 
@@ -173,6 +174,20 @@ func main() {
     } else {
         fmt.Printf("Database URL: %s\n", config.DatabaseURL)
         fmt.Printf("Max Connections: %d\n", config.MaxConnections)
+    }
+
+    // Set and unset environment variables
+    err = xenv.Set("TEMP_VAR", "temporary value")
+    if err != nil {
+        log.Printf("Failed to set TEMP_VAR: %v", err)
+    }
+
+    tempValue := xenv.Get("TEMP_VAR")
+    fmt.Printf("TEMP_VAR: %s\n", tempValue)
+
+    err = xenv.Unset("TEMP_VAR")
+    if err != nil {
+        log.Printf("Failed to unset TEMP_VAR: %v", err)
     }
 }
 ```

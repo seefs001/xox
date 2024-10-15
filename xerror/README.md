@@ -12,6 +12,8 @@
 - Error cause extraction
 - Error joining
 - Context addition to errors
+- JSON serialization of errors
+- Custom error types support
 
 ## Installation
 
@@ -132,6 +134,13 @@ err := xerror.NewWithStackTrace("operation failed")
 formattedErr := xerror.FormatError(err)
 ```
 
+### JSON Serialization
+
+```go
+// Convert error to JSON
+jsonStr, err := xerror.ToJSON(err)
+```
+
 ## Advanced Usage
 
 ### Custom Error Types
@@ -175,5 +184,56 @@ if xerror.IsErrorCode(err, ErrCodeNotFound) {
 3. Add relevant context to errors using `xerror.WithContext` or `xerror.WithFields`.
 4. Implement custom error types for domain-specific errors.
 5. Use `xerror.Retry` for operations that may experience temporary failures.
+6. Leverage `xerror.PanicIfError` and `xerror.RecoverError` for panic handling when appropriate.
+7. Use `xerror.Join` or `xerror.CombineErrors` when dealing with multiple errors.
+8. Utilize `xerror.FormatError` for detailed error information during debugging.
+
+## Example
+
+Here's a comprehensive example demonstrating various features of the `xerror` package:
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+
+    "github.com/seefs001/xox/xerror"
+)
+
+func main() {
+    // Basic error creation
+    err := xerror.New("This is a basic error")
+    fmt.Println("Basic error:", err)
+
+    // Error with code
+    errWithCode := xerror.NewWithCode("This is an error with code", 500)
+    fmt.Println("Error with code:", errWithCode)
+
+    // Wrapping an error
+    wrappedErr := xerror.Wrap(err, "wrapped error")
+    fmt.Println("Wrapped error:", wrappedErr)
+
+    // Error with context
+    errWithContext := xerror.WithContext(err, "user_id", 12345)
+    fmt.Println("Error with context:", errWithContext)
+
+    // Formatted error
+    formattedErr := xerror.NewErrorf("Formatted error: %d", 42)
+    fmt.Println("Formatted error:", formattedErr)
+
+    // Retry mechanism
+    retryFunc := func() error {
+        return xerror.ErrTimeout
+    }
+    retryErr := xerror.Retry(3, time.Second, retryFunc)
+    fmt.Println("Retry error:", retryErr)
+
+    // Error to JSON
+    jsonStr, _ := errWithContext.ToJSON()
+    fmt.Println("Error as JSON:", jsonStr)
+}
+```
 
 By following these practices and utilizing the `xerror` package, you can significantly improve error handling and debugging in your Go applications.

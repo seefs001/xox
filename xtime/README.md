@@ -203,3 +203,72 @@ The xtime package is designed to be thread-safe. All functions can be safely cal
 ## Performance Considerations
 
 While xtime provides convenient functions for time manipulations, some operations (like `DaysBetween` for large date ranges) may be computationally expensive. Consider caching results or using more efficient algorithms for performance-critical applications.
+
+## Examples
+
+Here are some additional examples to demonstrate the usage of xtime functions:
+
+### Working with Weeks
+
+```go
+now := time.Now()
+weekStart := xtime.StartOfWeek(now, time.Monday)
+weekEnd := xtime.EndOfWeek(now, time.Sunday)
+fmt.Printf("Week starts on %s and ends on %s\n", weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+```
+
+### Calculating Age
+
+```go
+birthDate := time.Date(1990, 5, 15, 0, 0, 0, 0, time.UTC)
+now := time.Now()
+age := now.Year() - birthDate.Year()
+if now.YearDay() < birthDate.YearDay() {
+    age--
+}
+fmt.Printf("Age: %d years\n", age)
+```
+
+### Working with Different Timezones
+
+```go
+now := time.Now()
+locations := []string{"America/New_York", "Europe/London", "Asia/Tokyo"}
+
+for _, loc := range locations {
+    t, err := xtime.TimeIn(now, loc)
+    if err != nil {
+        fmt.Printf("Error for %s: %v\n", loc, err)
+        continue
+    }
+    fmt.Printf("Time in %s: %s\n", loc, t.Format("2006-01-02 15:04:05"))
+}
+```
+
+### Parsing Complex Durations
+
+```go
+durations := []string{
+    "1y2M3w4d",
+    "5h30m",
+    "1d12h",
+    "2w3d4h5m6s",
+}
+
+for _, d := range durations {
+    parsed, err := xtime.ParseDuration(d)
+    if err != nil {
+        fmt.Printf("Error parsing %s: %v\n", d, err)
+        continue
+    }
+    fmt.Printf("Parsed %s as %s\n", d, xtime.FormatDuration(parsed))
+}
+```
+
+## Contributing
+
+Contributions to xtime are welcome! Please feel free to submit issues, fork the repository and send pull requests!
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -10,6 +10,7 @@ xjson is a powerful and flexible JSON manipulation package for Go, providing eas
 - Support for nested objects and arrays
 - Functional programming utilities (ForEach, Map, Filter, Reduce)
 - Error handling for invalid paths or type mismatches
+- JSON Schema generation for Go structs
 
 ## Installation
 
@@ -83,33 +84,84 @@ sum, err := xjson.Reduce(data["numbers"], func(accumulator, key, value interface
 }, 0.0)
 ```
 
+### Generating JSON Schema
+
+```go
+type Person struct {
+    Name string `json:"name" description:"The person's name"`
+    Age  int    `json:"age" description:"The person's age"`
+}
+
+schema, err := xjson.GenerateJSONSchema(Person{})
+if err != nil {
+    // Handle error
+}
+fmt.Printf("JSON Schema: %+v\n", schema)
+```
+
 ## API Reference
 
 ### Parsing
 
 - `ParseJSON(jsonStr string) (JSONObject, error)`
+  Parses a JSON string into a JSONObject.
 
 ### Querying
 
 - `Get(data JSONObject, path JSONPath) (interface{}, error)`
+  Retrieves a value from a JSON object using a JSON path.
+
 - `GetFromString(jsonStr string, path JSONPath) (interface{}, error)`
+  Retrieves a value from a JSON string using a JSON path.
+
 - `GetString(data JSONObject, path JSONPath) (string, error)`
+  Retrieves a string value from a JSON object using a JSON path.
+
 - `GetStringFromString(jsonStr string, path JSONPath) (string, error)`
+  Retrieves a string value from a JSON string using a JSON path.
+
 - `GetInt(data JSONObject, path JSONPath) (int, error)`
+  Retrieves an integer value from a JSON object using a JSON path.
+
 - `GetIntFromString(jsonStr string, path JSONPath) (int, error)`
+  Retrieves an integer value from a JSON string using a JSON path.
+
 - `GetFloat(data JSONObject, path JSONPath) (float64, error)`
+  Retrieves a float value from a JSON object using a JSON path.
+
 - `GetFloatFromString(jsonStr string, path JSONPath) (float64, error)`
+  Retrieves a float value from a JSON string using a JSON path.
+
 - `GetBool(data JSONObject, path JSONPath) (bool, error)`
+  Retrieves a boolean value from a JSON object using a JSON path.
+
 - `GetBoolFromString(jsonStr string, path JSONPath) (bool, error)`
+  Retrieves a boolean value from a JSON string using a JSON path.
+
 - `GetArray(data JSONObject, path JSONPath) (JSONArray, error)`
+  Retrieves an array value from a JSON object using a JSON path.
+
 - `GetArrayFromString(jsonStr string, path JSONPath) (JSONArray, error)`
+  Retrieves an array value from a JSON string using a JSON path.
 
 ### Functional Programming
 
 - `ForEach(data interface{}, fn func(key interface{}, value interface{}) error) error`
+  Applies a function to each element in an array or object.
+
 - `Map(data interface{}, fn func(key interface{}, value interface{}) (interface{}, error)) (interface{}, error)`
+  Applies a function to each element in an array or object and returns a new array or object.
+
 - `Filter(data interface{}, fn func(key interface{}, value interface{}) (bool, error)) (interface{}, error)`
+  Returns a new array or object with elements that pass the test implemented by the provided function.
+
 - `Reduce(data interface{}, fn func(accumulator, key, value interface{}) (interface{}, error), initialValue interface{}) (interface{}, error)`
+  Applies a function against an accumulator and each element in the array or object to reduce it to a single value.
+
+### JSON Schema Generation
+
+- `GenerateJSONSchema(v interface{}) (map[string]interface{}, error)`
+  Generates a JSON schema for the given struct.
 
 ## Error Handling
 
@@ -129,3 +181,11 @@ The xjson package uses reflection and type assertions, which may impact performa
 ## Thread Safety
 
 The xjson package does not provide built-in concurrency protection. When using xjson in concurrent environments, ensure proper synchronization is implemented at the application level.
+
+## Contributing
+
+Contributions to xjson are welcome! Please submit issues and pull requests on the GitHub repository.
+
+## License
+
+xjson is released under the MIT License. See the LICENSE file for details.

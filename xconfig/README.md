@@ -10,6 +10,9 @@ xconfig is a flexible and powerful configuration management package for Go appli
 - Thread-safe operations
 - Flatten nested maps into dot-notation keys
 - Parse configuration to structs
+- Default configuration instance for easy global usage
+- Support for custom environment variable prefixes
+- Ability to load configuration from files
 
 ## Installation
 
@@ -86,6 +89,9 @@ strValue, err := config.GetString("key")
 // Get integer value
 intValue, err := config.GetInt("key")
 
+// Get int32 value
+int32Value, err := config.GetInt32("key")
+
 // Get boolean value
 boolValue, err := config.GetBool("key")
 
@@ -113,6 +119,86 @@ xconfig provides a default Config instance for convenience:
 xconfig.Put("app_name", "MyApp")
 appName, err := xconfig.GetString("app_name")
 ```
+
+### Working with Nested Structures
+
+xconfig supports nested structures using dot notation:
+
+```go
+jsonStr := `{
+    "database": {
+        "master": {
+            "host": "localhost",
+            "port": 5432
+        },
+        "slave": [
+            {"host": "slave1", "port": 5433},
+            {"host": "slave2", "port": 5434}
+        ]
+    }
+}`
+config.LoadFromJSON(jsonStr)
+
+masterHost, _ := config.GetString("database.master.host")
+slavePort, _ := config.GetInt("database.slave.1.port")
+```
+
+### Flattening Nested Maps
+
+xconfig can flatten nested maps into dot-notation keys:
+
+```go
+nestedMap := map[string]any{
+    "app": map[string]any{
+        "name": "MyApp",
+        "version": "1.0.0",
+    },
+}
+config.FlattenMap(nestedMap, "")
+
+appName, _ := config.GetString("app.name")
+```
+
+## Advanced Usage
+
+### Custom Environment Variable Prefix
+
+```go
+config := xconfig.NewConfig()
+err := config.LoadFromEnv(xconfig.WithEnvPrefix("MYAPP_"))
+```
+
+### Loading from Multiple Sources
+
+```go
+config := xconfig.NewConfig()
+config.LoadFromJSON(jsonStr)
+config.LoadFromEnv()
+config.LoadFromStruct(structConfig)
+```
+
+### Thread-safe Operations
+
+All operations in xconfig are thread-safe, allowing for concurrent access from multiple goroutines.
+
+### Error Handling
+
+All getter methods return an error as the second return value. Always check for errors:
+
+```go
+value, err := config.GetString("key")
+if err != nil {
+    // Handle error
+}
+```
+
+## Best Practices
+
+1. Use a single configuration instance throughout your application.
+2. Load configuration early in your application's lifecycle.
+3. Use strongly typed getters (GetString, GetInt, etc.) to ensure type safety.
+4. Utilize the dot notation for accessing nested configurations.
+5. When working with environment variables, consider using a prefix to avoid conflicts.
 
 ## Example
 
@@ -173,3 +259,11 @@ func main() {
 ```
 
 This example demonstrates loading configuration from JSON and environment variables, accessing values, and parsing the configuration to a struct.
+
+## Contributing
+
+Contributions to xconfig are welcome! Please submit issues and pull requests on the GitHub repository.
+
+## License
+
+xconfig is released under the MIT License. See the LICENSE file for details.
