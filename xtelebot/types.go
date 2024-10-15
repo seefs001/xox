@@ -12,6 +12,64 @@ import (
 	"time"
 )
 
+const (
+	// API Methods
+	MethodSendMessage         = "sendMessage"
+	MethodGetUpdates          = "getUpdates"
+	MethodSendPhoto           = "sendPhoto"
+	MethodSendDocument        = "sendDocument"
+	MethodSendLocation        = "sendLocation"
+	MethodAnswerCallbackQuery = "answerCallbackQuery"
+	MethodSetWebhook          = "setWebhook"
+	MethodDeleteWebhook       = "deleteWebhook"
+	MethodGetWebhookInfo      = "getWebhookInfo"
+	MethodSetMyCommands       = "setMyCommands"
+	MethodDeleteMyCommands    = "deleteMyCommands"
+	MethodGetMyCommands       = "getMyCommands"
+	MethodSendAudio           = "sendAudio"
+	MethodSendVideo           = "sendVideo"
+	MethodSendVoice           = "sendVoice"
+	MethodSendVideoNote       = "sendVideoNote"
+	MethodSendMediaGroup      = "sendMediaGroup"
+	MethodGetMe               = "getMe"
+	MethodEditMessageText     = "editMessageText"
+	MethodEditMessageCaption  = "editMessageCaption"
+	MethodEditMessageMedia    = "editMessageMedia"
+
+	// Parameter Keys
+	ParamChatID                = "chat_id"
+	ParamText                  = "text"
+	ParamPhoto                 = "photo"
+	ParamDocument              = "document"
+	ParamLatitude              = "latitude"
+	ParamLongitude             = "longitude"
+	ParamReplyMarkup           = "reply_markup"
+	ParamParseMode             = "parse_mode"
+	ParamCallbackQueryID       = "callback_query_id"
+	ParamURL                   = "url"
+	ParamMaxConnections        = "max_connections"
+	ParamAllowedUpdates        = "allowed_updates"
+	ParamCertificate           = "certificate"
+	ParamCommands              = "commands"
+	ParamAudio                 = "audio"
+	ParamVideo                 = "video"
+	ParamVoice                 = "voice"
+	ParamVideoNote             = "video_note"
+	ParamMedia                 = "media"
+	ParamOffset                = "offset"
+	ParamLimit                 = "limit"
+	ParamBusinessConnectionID  = "business_connection_id"
+	ParamMessageID             = "message_id"
+	ParamInlineMessageID       = "inline_message_id"
+	ParamEntities              = "entities"
+	ParamLinkPreviewOptions    = "link_preview_options"
+	ParamCaption               = "caption"
+	ParamCaptionEntities       = "caption_entities"
+	ParamShowCaptionAboveMedia = "show_caption_above_media"
+
+	DefaultBaseURL = "https://api.telegram.org/bot"
+)
+
 // Params represents a set of parameters that gets passed to a request.
 type Params map[string]string
 
@@ -249,8 +307,8 @@ func (u *User) String() string {
 type Chat struct {
 	// ID is a unique identifier for this chat
 	ID int64 `json:"id"`
-	// Type of chat, can be either “private”, “group”, “supergroup” or “channel”
-	Type string `json:"type"`
+	// Type of chat, can be either "private", "group", "supergroup" or "channel"
+	Type ChatType `json:"type"`
 	// Title for supergroups, channels and group chats
 	//
 	// optional
@@ -338,24 +396,32 @@ type Chat struct {
 	Location *ChatLocation `json:"location,omitempty"`
 }
 
-// IsPrivate returns if the Chat is a private conversation.
-func (c Chat) IsPrivate() bool {
-	return c.Type == "private"
+// Constants for chat types
+const (
+	ChatTypePrivate    ChatType = "private"
+	ChatTypeGroup      ChatType = "group"
+	ChatTypeSupergroup ChatType = "supergroup"
+	ChatTypeChannel    ChatType = "channel"
+)
+
+// IsPrivate returns true if the chat is a private chat
+func (c *Chat) IsPrivate() bool {
+	return c.Type == ChatTypePrivate
 }
 
-// IsGroup returns if the Chat is a group.
-func (c Chat) IsGroup() bool {
-	return c.Type == "group"
+// IsGroup returns true if the chat is a group chat
+func (c *Chat) IsGroup() bool {
+	return c.Type == ChatTypeGroup
 }
 
-// IsSuperGroup returns if the Chat is a supergroup.
-func (c Chat) IsSuperGroup() bool {
-	return c.Type == "supergroup"
+// IsSuperGroup returns true if the chat is a supergroup chat
+func (c *Chat) IsSuperGroup() bool {
+	return c.Type == ChatTypeSupergroup
 }
 
-// IsChannel returns if the Chat is a channel.
-func (c Chat) IsChannel() bool {
-	return c.Type == "channel"
+// IsChannel returns true if the chat is a channel
+func (c *Chat) IsChannel() bool {
+	return c.Type == ChatTypeChannel
 }
 
 // Message represents a message.
@@ -715,39 +781,68 @@ type MessageID struct {
 type MessageEntity struct {
 	// Type of the entity.
 	// Can be:
-	//  “mention” (@username),
-	//  “hashtag” (#hashtag),
-	//  “cashtag” ($USD),
-	//  “bot_command” (/start@jobs_bot),
-	//  “url” (https://telegram.org),
-	//  “email” (do-not-reply@telegram.org),
-	//  “phone_number” (+1-212-555-0123),
-	//  “bold” (bold text),
-	//  “italic” (italic text),
-	//  “underline” (underlined text),
-	//  “strikethrough” (strikethrough text),
+	//  "mention" (@username),
+	//  "hashtag" (#hashtag),
+	//  "cashtag" ($USD),
+	//  "bot_command" (/start@jobs_bot),
+	//  "url" (https://telegram.org),
+	//  "email" (do-not-reply@telegram.org),
+	//  "phone_number" (+1-212-555-0123),
+	//  "bold" (bold text),
+	//  "italic" (italic text),
+	//  "underline" (underlined text),
+	//  "strikethrough" (strikethrough text),
 	//  "spoiler" (spoiler message),
-	//  “code” (monowidth string),
-	//  “pre” (monowidth block),
-	//  “text_link” (for clickable text URLs),
-	//  “text_mention” (for users without usernames)
+	//  "code" (monowidth string),
+	//  "pre" (monowidth block),
+	//  "text_link" (for clickable text URLs),
+	//  "text_mention" (for users without usernames)
 	Type string `json:"type"`
 	// Offset in UTF-16 code units to the start of the entity
 	Offset int `json:"offset"`
 	// Length
 	Length int `json:"length"`
-	// URL for “text_link” only, url that will be opened after user taps on the text
+	// URL for "text_link" only, url that will be opened after user taps on the text
 	//
 	// optional
 	URL string `json:"url,omitempty"`
-	// User for “text_mention” only, the mentioned user
+	// User for "text_mention" only, the mentioned user
 	//
 	// optional
 	User *User `json:"user,omitempty"`
-	// Language for “pre” only, the programming language of the entity text
+	// Language for "pre" only, the programming language of the entity text
 	//
 	// optional
 	Language string `json:"language,omitempty"`
+}
+
+// Constants for message entities
+const (
+	EntityMention       = "mention"
+	EntityHashtag       = "hashtag"
+	EntityCashtag       = "cashtag"
+	EntityBotCommand    = "bot_command"
+	EntityURL           = "url"
+	EntityEmail         = "email"
+	EntityPhoneNumber   = "phone_number"
+	EntityBold          = "bold"
+	EntityItalic        = "italic"
+	EntityUnderline     = "underline"
+	EntityStrikethrough = "strikethrough"
+	EntityCode          = "code"
+	EntityPre           = "pre"
+	EntityTextLink      = "text_link"
+	EntityTextMention   = "text_mention"
+)
+
+// HasEntities returns true if the message has entities
+func (m *Message) HasEntities() bool {
+	return len(m.Entities) > 0
+}
+
+// GetEntityText returns the text of a specific entity
+func (m *Message) GetEntityText(e *MessageEntity) string {
+	return m.Text[e.Offset : e.Offset+e.Length]
 }
 
 // ParseURL attempts to parse a URL contained within a MessageEntity.
@@ -761,58 +856,58 @@ func (e MessageEntity) ParseURL() (*url.URL, error) {
 
 // IsMention returns true if the type of the message entity is "mention" (@username).
 func (e MessageEntity) IsMention() bool {
-	return e.Type == "mention"
+	return e.Type == EntityMention
 }
 
 // IsTextMention returns true if the type of the message entity is "text_mention"
 // (At this time, the user field exists, and occurs when tagging a member without a username)
 func (e MessageEntity) IsTextMention() bool {
-	return e.Type == "text_mention"
+	return e.Type == EntityTextMention
 }
 
 // IsHashtag returns true if the type of the message entity is "hashtag".
 func (e MessageEntity) IsHashtag() bool {
-	return e.Type == "hashtag"
+	return e.Type == EntityHashtag
 }
 
 // IsCommand returns true if the type of the message entity is "bot_command".
 func (e MessageEntity) IsCommand() bool {
-	return e.Type == "bot_command"
+	return e.Type == EntityBotCommand
 }
 
 // IsURL returns true if the type of the message entity is "url".
 func (e MessageEntity) IsURL() bool {
-	return e.Type == "url"
+	return e.Type == EntityURL
 }
 
 // IsEmail returns true if the type of the message entity is "email".
 func (e MessageEntity) IsEmail() bool {
-	return e.Type == "email"
+	return e.Type == EntityEmail
 }
 
 // IsBold returns true if the type of the message entity is "bold" (bold text).
 func (e MessageEntity) IsBold() bool {
-	return e.Type == "bold"
+	return e.Type == EntityBold
 }
 
 // IsItalic returns true if the type of the message entity is "italic" (italic text).
 func (e MessageEntity) IsItalic() bool {
-	return e.Type == "italic"
+	return e.Type == EntityItalic
 }
 
 // IsCode returns true if the type of the message entity is "code" (monowidth string).
 func (e MessageEntity) IsCode() bool {
-	return e.Type == "code"
+	return e.Type == EntityCode
 }
 
 // IsPre returns true if the type of the message entity is "pre" (monowidth block).
 func (e MessageEntity) IsPre() bool {
-	return e.Type == "pre"
+	return e.Type == EntityPre
 }
 
 // IsTextLink returns true if the type of the message entity is "text_link" (clickable text URL).
 func (e MessageEntity) IsTextLink() bool {
-	return e.Type == "text_link"
+	return e.Type == EntityTextLink
 }
 
 // PhotoSize represents one size of a photo or a file / sticker thumbnail.
@@ -1101,6 +1196,22 @@ type Poll struct {
 	CloseDate int `json:"close_date,omitempty"`
 }
 
+// Constants for poll types
+const (
+	PollTypeRegular = "regular"
+	PollTypeQuiz    = "quiz"
+)
+
+// IsRegularPoll returns true if the poll is a regular poll
+func (p *Poll) IsRegularPoll() bool {
+	return p.Type == PollTypeRegular
+}
+
+// IsQuizPoll returns true if the poll is a quiz poll
+func (p *Poll) IsQuizPoll() bool {
+	return p.Type == PollTypeQuiz
+}
+
 // Location represents a point on the map.
 type Location struct {
 	// Longitude as defined by sender
@@ -1319,7 +1430,7 @@ type KeyboardButton struct {
 	// optional
 	RequestPoll *KeyboardButtonPollType `json:"request_poll,omitempty"`
 	// WebApp if specified, the described Web App will be launched when the button
-	// is pressed. The Web App will be able to send a “web_app_data” service
+	// is pressed. The Web App will be able to send a "web_app_data" service
 	// message. Available in private chats only.
 	//
 	// optional
@@ -1546,7 +1657,7 @@ type ChatPhoto struct {
 // ChatInviteLink represents an invite link for a chat.
 type ChatInviteLink struct {
 	// InviteLink is the invite link. If the link was created by another chat
-	// administrator, then the second part of the link will be replaced with “…”.
+	// administrator, then the second part of the link will be replaced with "…".
 	InviteLink string `json:"invite_link"`
 	// Creator of the link.
 	Creator User `json:"creator"`
@@ -1600,12 +1711,12 @@ type ChatMember struct {
 	User *User `json:"user"`
 	// Status the member's status in the chat.
 	// Can be
-	//  “creator”,
-	//  “administrator”,
-	//  “member”,
-	//  “restricted”,
-	//  “left” or
-	//  “kicked”
+	//  "creator",
+	//  "administrator",
+	//  "member",
+	//  "restricted",
+	//  "left" or
+	//  "kicked"
 	Status string `json:"status"`
 	// CustomTitle owner and administrators only. Custom title for this user
 	//
@@ -1714,17 +1825,40 @@ type ChatMember struct {
 	CanAddWebPagePreviews bool `json:"can_add_web_page_previews,omitempty"`
 }
 
-// IsCreator returns if the ChatMember was the creator of the chat.
-func (chat ChatMember) IsCreator() bool { return chat.Status == "creator" }
+// Constants for chat member status
+const (
+	MemberStatusCreator       = "creator"
+	MemberStatusAdministrator = "administrator"
+	MemberStatusMember        = "member"
+	MemberStatusRestricted    = "restricted"
+	MemberStatusLeft          = "left"
+	MemberStatusKicked        = "kicked"
+)
 
-// IsAdministrator returns if the ChatMember is a chat administrator.
-func (chat ChatMember) IsAdministrator() bool { return chat.Status == "administrator" }
+// IsCreator returns true if the chat member is the creator
+func (cm *ChatMember) IsCreator() bool {
+	return cm.Status == MemberStatusCreator
+}
 
-// HasLeft returns if the ChatMember left the chat.
-func (chat ChatMember) HasLeft() bool { return chat.Status == "left" }
+// IsAdministrator returns true if the chat member is an administrator
+func (cm *ChatMember) IsAdministrator() bool {
+	return cm.Status == MemberStatusAdministrator
+}
 
-// WasKicked returns if the ChatMember was kicked from the chat.
-func (chat ChatMember) WasKicked() bool { return chat.Status == "kicked" }
+// IsRestricted returns true if the chat member is restricted
+func (cm *ChatMember) IsRestricted() bool {
+	return cm.Status == MemberStatusRestricted
+}
+
+// HasLeft returns true if the chat member has left
+func (cm *ChatMember) HasLeft() bool {
+	return cm.Status == MemberStatusLeft
+}
+
+// WasKicked returns true if the chat member was kicked
+func (cm *ChatMember) WasKicked() bool {
+	return cm.Status == MemberStatusKicked
+}
 
 // ChatMemberUpdated represents changes in the status of a chat member.
 type ChatMemberUpdated struct {
@@ -1872,7 +2006,7 @@ type BaseInputMedia struct {
 	// Media file to send. Pass a file_id to send a file
 	// that exists on the Telegram servers (recommended),
 	// pass an HTTP URL for Telegram to get a file from the Internet,
-	// or pass “attach://<file_attach_name>” to upload a new one
+	// or pass "attach://<file_attach_name>" to upload a new one
 	// using multipart/form-data under <file_attach_name> name.
 	Media RequestFileData `json:"media"`
 	// thumb intentionally missing as it is not currently compatible
@@ -2038,7 +2172,7 @@ type StickerSet struct {
 	Name string `json:"name"`
 	// Title sticker set title
 	Title string `json:"title"`
-	// StickerType of stickers in the set, currently one of “regular”, “mask”, “custom_emoji”
+	// StickerType of stickers in the set, currently one of "regular", "mask", "custom_emoji"
 	StickerType string `json:"sticker_type"`
 	// IsAnimated true, if the sticker set contains animated stickers
 	IsAnimated bool `json:"is_animated"`
@@ -2056,7 +2190,7 @@ type StickerSet struct {
 // by default.
 type MaskPosition struct {
 	// The part of the face relative to which the mask should be placed.
-	// One of “forehead”, “eyes”, “mouth”, or “chin”.
+	// One of "forehead", "eyes", "mouth", or "chin".
 	Point string `json:"point"`
 	// Shift by X-axis measured in widths of the mask scaled to the face size,
 	// from left to right. For example, choosing -1.0 will place mask just to
@@ -2162,8 +2296,8 @@ type InlineQuery struct {
 	// Offset of the results to be returned, can be controlled by the bot.
 	Offset string `json:"offset"`
 	// Type of the chat, from which the inline query was sent. Can be either
-	// “sender” for a private chat with the inline query sender, “private”,
-	// “group”, “supergroup”, or “channel”. The chat type should be always known
+	// "sender" for a private chat with the inline query sender, "private",
+	// "group", "supergroup", or "channel". The chat type should be always known
 	// for requests sent from official clients and most third-party clients,
 	// unless the request was sent from a secret chat
 	//
@@ -2179,12 +2313,8 @@ type InlineQuery struct {
 type ChatType string
 
 const (
-	ChatTypeSender     ChatType = "sender"
-	ChatTypePrivate    ChatType = "private"
-	ChatTypeGroup      ChatType = "group"
-	ChatTypeSupergroup ChatType = "supergroup"
-	ChatTypeChannel    ChatType = "channel"
-	ChatTypeUnknown    ChatType = "unknown"
+	ChatTypeSender  ChatType = "sender"
+	ChatTypeUnknown ChatType = "unknown"
 )
 
 // InlineQueryResultCachedAudio is an inline query response with cached audio.
@@ -2598,7 +2728,7 @@ type InlineQueryResultDocument struct {
 	Caption string `json:"caption,omitempty"`
 	// URL a valid url for the file
 	URL string `json:"document_url"`
-	// MimeType of the content of the file, either “application/pdf” or “application/zip”
+	// MimeType of the content of the file, either "application/pdf" or "application/zip"
 	MimeType string `json:"mime_type"`
 	// Description short description of the result
 	//
@@ -2858,7 +2988,7 @@ type InlineQueryResultVenue struct {
 	// optional
 	FoursquareID string `json:"foursquare_id,omitempty"`
 	// FoursquareType foursquare type of the venue, if known.
-	// (For example, “arts_entertainment/default”, “arts_entertainment/aquarium” or “food/icecream”.)
+	// (For example, "arts_entertainment/default", "arts_entertainment/aquarium" or "food/icecream.".)
 	//
 	// optional
 	FoursquareType string `json:"foursquare_type,omitempty"`
@@ -2900,7 +3030,7 @@ type InlineQueryResultVideo struct {
 	ID string `json:"id"`
 	// URL a valid url for the embedded video player or video file
 	URL string `json:"video_url"`
-	// MimeType of the content of video url, “text/html” or “video/mp4”
+	// MimeType of the content of video url, "text/html" or "video/mp4"
 	MimeType string `json:"mime_type"`
 	//
 	// ThumbURL url of the thumbnail (jpeg only) for the video
@@ -3368,7 +3498,7 @@ func (eo *PassportScopeElementOneOfSeveral) ScopeType() string {
 
 // PassportScopeElementOne requires the specified element be provided.
 type PassportScopeElementOne struct {
-	Type        string `json:"type"` // One of “personal_details”, “passport”, “driver_license”, “identity_card”, “internal_passport”, “address”, “utility_bill”, “bank_statement”, “rental_agreement”, “passport_registration”, “temporary_registration”, “phone_number”, “email”
+	Type        string `json:"type"` // One of "personal_details", "passport", "driver_license", "identity_card", "internal_passport", "address", "utility_bill", "bank_statement", "rental_agreement", "passport_registration", "temporary_registration", "phone_number", "email"
 	Selfie      bool   `json:"selfie"`
 	Translation bool   `json:"translation"`
 	NativeNames bool   `json:"native_name"`
@@ -5105,7 +5235,7 @@ type DiceConfig struct {
 	// Currently, must be one of 🎲, 🎯, 🏀, ⚽, 🎳, or 🎰.
 	// Dice can have values 1-6 for 🎲, 🎯, and 🎳, values 1-5 for 🏀 and ⚽,
 	// and values 1-64 for 🎰.
-	// Defaults to “🎲”
+	// Defaults to "🎲"
 	Emoji string `json:"emoji,omitempty"`
 }
 

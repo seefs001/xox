@@ -20,64 +20,6 @@ import (
 	"github.com/seefs001/xox/xlog"
 )
 
-const (
-	// API Methods
-	MethodSendMessage         = "sendMessage"
-	MethodGetUpdates          = "getUpdates"
-	MethodSendPhoto           = "sendPhoto"
-	MethodSendDocument        = "sendDocument"
-	MethodSendLocation        = "sendLocation"
-	MethodAnswerCallbackQuery = "answerCallbackQuery"
-	MethodSetWebhook          = "setWebhook"
-	MethodDeleteWebhook       = "deleteWebhook"
-	MethodGetWebhookInfo      = "getWebhookInfo"
-	MethodSetMyCommands       = "setMyCommands"
-	MethodDeleteMyCommands    = "deleteMyCommands"
-	MethodGetMyCommands       = "getMyCommands"
-	MethodSendAudio           = "sendAudio"
-	MethodSendVideo           = "sendVideo"
-	MethodSendVoice           = "sendVoice"
-	MethodSendVideoNote       = "sendVideoNote"
-	MethodSendMediaGroup      = "sendMediaGroup"
-	MethodGetMe               = "getMe"
-	MethodEditMessageText     = "editMessageText"
-	MethodEditMessageCaption  = "editMessageCaption"
-	MethodEditMessageMedia    = "editMessageMedia"
-
-	// Parameter Keys
-	ParamChatID                = "chat_id"
-	ParamText                  = "text"
-	ParamPhoto                 = "photo"
-	ParamDocument              = "document"
-	ParamLatitude              = "latitude"
-	ParamLongitude             = "longitude"
-	ParamReplyMarkup           = "reply_markup"
-	ParamParseMode             = "parse_mode"
-	ParamCallbackQueryID       = "callback_query_id"
-	ParamURL                   = "url"
-	ParamMaxConnections        = "max_connections"
-	ParamAllowedUpdates        = "allowed_updates"
-	ParamCertificate           = "certificate"
-	ParamCommands              = "commands"
-	ParamAudio                 = "audio"
-	ParamVideo                 = "video"
-	ParamVoice                 = "voice"
-	ParamVideoNote             = "video_note"
-	ParamMedia                 = "media"
-	ParamOffset                = "offset"
-	ParamLimit                 = "limit"
-	ParamBusinessConnectionID  = "business_connection_id"
-	ParamMessageID             = "message_id"
-	ParamInlineMessageID       = "inline_message_id"
-	ParamEntities              = "entities"
-	ParamLinkPreviewOptions    = "link_preview_options"
-	ParamCaption               = "caption"
-	ParamCaptionEntities       = "caption_entities"
-	ParamShowCaptionAboveMedia = "show_caption_above_media"
-
-	DefaultBaseURL = "https://api.telegram.org/bot"
-)
-
 // Bot represents a Telegram Bot
 type Bot struct {
 	token          string

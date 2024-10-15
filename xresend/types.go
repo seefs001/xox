@@ -22,6 +22,31 @@ type SendEmailRequest struct {
 	Tags        []Tag        `json:"tags,omitempty"`
 }
 
+// AddRecipient adds a recipient to the To field
+func (r *SendEmailRequest) AddRecipient(email string) {
+	r.To = append(r.To, email)
+}
+
+// AddCC adds a recipient to the Cc field
+func (r *SendEmailRequest) AddCC(email string) {
+	r.Cc = append(r.Cc, email)
+}
+
+// AddBCC adds a recipient to the Bcc field
+func (r *SendEmailRequest) AddBCC(email string) {
+	r.Bcc = append(r.Bcc, email)
+}
+
+// AddAttachment adds an attachment to the email
+func (r *SendEmailRequest) AddAttachment(attachment Attachment) {
+	r.Attachments = append(r.Attachments, attachment)
+}
+
+// AddTag adds a tag to the email
+func (r *SendEmailRequest) AddTag(name, value string) {
+	r.Tags = append(r.Tags, Tag{Name: name, Value: value})
+}
+
 // Attachment represents an email attachment
 type Attachment struct {
 	Content     string `json:"content"`
@@ -55,6 +80,20 @@ type Email struct {
 	Cc        []string   `json:"cc"`
 	ReplyTo   []string   `json:"reply_to"`
 	LastEvent string     `json:"last_event"`
+}
+
+// Recipients returns all recipients (To, Cc, Bcc) of the email
+func (e *Email) Recipients() []string {
+	recipients := make([]string, 0, len(e.To)+len(e.Cc)+len(e.Bcc))
+	recipients = append(recipients, e.To...)
+	recipients = append(recipients, e.Cc...)
+	recipients = append(recipients, e.Bcc...)
+	return recipients
+}
+
+// IsDelivered checks if the last event indicates the email was delivered
+func (e *Email) IsDelivered() bool {
+	return e.LastEvent == "delivered"
 }
 
 // CreateDomainRequest represents the request body for creating a domain
