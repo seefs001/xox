@@ -117,21 +117,53 @@ type Choice struct {
 	Logprobs     interface{}           `json:"logprobs"`
 }
 
-// Update CreateChatCompletionRequest to include tools and tool_choice
+// Update CreateChatCompletionRequest to include response_format
 type CreateChatCompletionRequest struct {
-	Model       string                  `json:"model"`
-	Messages    []ChatCompletionMessage `json:"messages"`
-	Temperature float32                 `json:"temperature,omitempty"`
-	TopP        float32                 `json:"top_p,omitempty"`
-	N           int                     `json:"n,omitempty"`
-	Stream      bool                    `json:"stream,omitempty"`
-	Stop        []string                `json:"stop,omitempty"`
-	MaxTokens   int                     `json:"max_tokens,omitempty"`
-	Tools       []Tool                  `json:"tools,omitempty"`
-	ToolChoice  string                  `json:"tool_choice,omitempty"`
+	Model          string                  `json:"model"`
+	Messages       []ChatCompletionMessage `json:"messages"`
+	Temperature    float32                 `json:"temperature,omitempty"`
+	TopP           float32                 `json:"top_p,omitempty"`
+	N              int                     `json:"n,omitempty"`
+	Stream         bool                    `json:"stream,omitempty"`
+	Stop           []string                `json:"stop,omitempty"`
+	MaxTokens      int                     `json:"max_tokens,omitempty"`
+	Tools          []Tool                  `json:"tools,omitempty"`
+	ToolChoice     string                  `json:"tool_choice,omitempty"`
+	ResponseFormat *ResponseFormat         `json:"response_format,omitempty"`
 }
 
-// Update CreateChatCompletionResponse to include usage details
+// ResponseFormat specifies the format that the model must output.
+// Compatible with GPT-4, GPT-4 Turbo, and GPT-3.5 Turbo models newer than gpt-3.5-turbo-1106.
+type ResponseFormat struct {
+	// Type is the type of response format being defined.
+	// Possible values: "text", "json_object", "json_schema"
+	Type string `json:"type"`
+
+	// JSONSchema is used when Type is "json_schema".
+	// It enables Structured Outputs which ensures the model will match your supplied JSON schema.
+	JSONSchema *JSONSchemaFormat `json:"json_schema,omitempty"`
+}
+
+// JSONSchemaFormat defines the structure for JSON schema output.
+type JSONSchemaFormat struct {
+	// Description of what the response format is for,
+	// used by the model to determine how to respond in the format.
+	Description string `json:"description,omitempty"`
+
+	// Name of the response format. Must be a-z, A-Z, 0-9,
+	// or contain underscores and dashes, with a maximum length of 64.
+	Name string `json:"name"`
+
+	// Schema for the response format, described as a JSON Schema object.
+	Schema json.RawMessage `json:"schema,omitempty"`
+
+	// Strict enables strict schema adherence when generating the output.
+	// If true, the model will always follow the exact schema defined in the Schema field.
+	// Only a subset of JSON Schema is supported when Strict is true.
+	Strict *bool `json:"strict,omitempty"`
+}
+
+// CreateChatCompletionResponse represents the response from the OpenAI API for chat completion requests.
 type CreateChatCompletionResponse struct {
 	ID      string   `json:"id"`
 	Object  string   `json:"object"`

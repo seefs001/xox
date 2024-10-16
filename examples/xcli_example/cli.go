@@ -8,7 +8,7 @@ import (
 	"github.com/seefs001/xox/xlog"
 )
 
-func main() {
+func _main() {
 	app := xcli.NewApp("test", "test application", "1.0.0")
 
 	// Enable debug mode if needed

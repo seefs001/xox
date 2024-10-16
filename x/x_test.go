@@ -1606,3 +1606,119 @@ func TestJSONToURLValues(t *testing.T) {
 		})
 	}
 }
+
+func TestMapToSlice(t *testing.T) {
+	t.Run("Direct conversion with struct", func(t *testing.T) {
+		type Person struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		data := map[string]interface{}{
+			"person1": map[string]interface{}{"name": "Alice", "age": 30},
+			"person2": map[string]interface{}{"name": "Bob", "age": 25},
+		}
+
+		data2 := map[string]Person{
+			"person1": {Name: "Alice", Age: 30},
+			"person2": {Name: "Bob", Age: 25},
+		}
+
+		result, err := x.MapToSlice[string, interface{}, Person](data, nil)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+
+		result2, err := x.MapToSlice(data2, func(k string, v Person) Person {
+			return v
+		})
+		assert.NoError(t, err)
+		assert.Len(t, result2, 2)
+
+		expected := []Person{
+			{Name: "Alice", Age: 30},
+			{Name: "Bob", Age: 25},
+		}
+		assert.ElementsMatch(t, expected, result)
+	})
+
+	t.Run("Custom transformation", func(t *testing.T) {
+		data := map[int]int64{1: 4, 2: 5, 3: 6}
+
+		result, err := x.MapToSlice(data, func(k int, v int64) string {
+			return fmt.Sprintf("%d_%d", k, v)
+		})
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []string{"1_4", "2_5", "3_6"}, result)
+	})
+
+	t.Run("Empty map", func(t *testing.T) {
+		data := map[string]int{}
+
+		result, err := x.MapToSlice(data, func(k string, v int) string {
+			return fmt.Sprintf("%s:%d", k, v)
+		})
+
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("Nil map", func(t *testing.T) {
+		var data map[string]int
+
+		result, err := x.MapToSlice(data, func(k string, v int) string {
+			return fmt.Sprintf("%s:%d", k, v)
+		})
+
+		assert.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Map with interface{} values", func(t *testing.T) {
+		data := map[string]interface{}{
+			"a": 1,
+			"b": "hello",
+			"c": true,
+		}
+
+		result, err := x.MapToSlice(data, func(k string, v interface{}) string {
+			return fmt.Sprintf("%s:%v", k, v)
+		})
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []string{"a:1", "b:hello", "c:true"}, result)
+	})
+
+	t.Run("Direct conversion with non-struct type", func(t *testing.T) {
+		data := map[string]int{"a": 1, "b": 2, "c": 3}
+
+		result, err := x.MapToSlice[string, int, int](data, nil)
+		assert.NoError(t, err)
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []int{1, 2, 3}, result)
+	})
+
+	t.Run("Direct conversion with unmarshalable data", func(t *testing.T) {
+		data := map[string]interface{}{
+			"a": make(chan int), // channels are not JSON marshalable
+		}
+
+		_, err := x.MapToSlice[string, interface{}, interface{}](data, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("Direct conversion with invalid JSON", func(t *testing.T) {
+		type InvalidStruct struct {
+			Field int `json:"field"`
+		}
+
+		data := map[string]interface{}{
+			"a": map[string]interface{}{"field": "not an int"},
+		}
+
+		_, err := x.MapToSlice[string, interface{}, InvalidStruct](data, nil)
+		assert.Error(t, err)
+	})
+}

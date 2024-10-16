@@ -2039,3 +2039,79 @@ func JSONToURLValues(jsonStr string) (url.Values, error) {
 
 	return values, nil
 }
+
+// MapToSlice transforms a map into a slice based on a specific iteratee function.
+// It uses three generic type parameters:
+// K: the type of the map keys (must be comparable)
+// V: the type of the map values
+// R: the type of the resulting slice elements
+//
+// Parameters:
+// - data: the input map to be transformed
+// - iteratee: a function that takes a key-value pair from the map and returns a value of type R
+//
+// Returns:
+// - A slice of type []R containing the transformed elements
+// - An error if any issues occur during the transformation
+//
+// Example with type inference:
+//
+//	data := map[string]int{"a": 1, "b": 2, "c": 3}
+//	result, err := MapToSlice(data, func(k string, v int) string {
+//	    return fmt.Sprintf("%s:%d", k, v)
+//	})
+//	if err != nil {
+//	    // handle error
+//	}
+//	fmt.Printf("%v\n", result) // Output: [a:1 b:2 c:3] (order may vary)
+//
+// Example with explicit type parameters:
+//
+//	type Person struct {
+//	    Name string
+//	    Age  int
+//	}
+//
+//	data := map[string]map[string]interface{}{
+//	    "person1": {"name": "Alice", "age": 30},
+//	    "person2": {"name": "Bob", "age": 25},
+//	}
+//
+//	result, err := MapToSlice[string, map[string]interface{}, Person](data, func(k string, v map[string]interface{}) Person {
+//	    return Person{
+//	        Name: v["name"].(string),
+//	        Age:  v["age"].(int),
+//	    }
+//	})
+//	if err != nil {
+//	    // handle error
+//	}
+//	fmt.Printf("%+v\n", result) // Output: [{Name:Alice Age:30} {Name:Bob Age:25}] (order may vary)
+func MapToSlice[K comparable, V any, R any](data map[K]V, iteratee func(K, V) R) ([]R, error) {
+	var result []R
+
+	if iteratee == nil {
+		// Direct conversion using JSON marshaling/unmarshaling
+		for _, v := range data {
+			var item R
+			jsonData, err := json.Marshal(v)
+			if err != nil {
+				return nil, xerror.Wrap(err, "failed to marshal map value")
+			}
+
+			err = json.Unmarshal(jsonData, &item)
+			if err != nil {
+				return nil, xerror.Wrap(err, "failed to unmarshal into struct")
+			}
+
+			result = append(result, item)
+		}
+	} else {
+		// Custom transformation using the provided iteratee function
+		for k, v := range data {
+			result = append(result, iteratee(k, v))
+		}
+	}
+
+	return result, nil
+}
