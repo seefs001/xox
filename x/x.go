@@ -2115,3 +2115,50 @@ func MapToSlice[K comparable, V any, R any](data map[K]V, iteratee func(K, V) R)
 
 	return result, nil
 }
+
+// Ptr returns a pointer to the given value.
+//
+// This function is useful when you need to pass a pointer to a value,
+// especially for optional fields in structs or when working with APIs
+// that expect pointers.
+//
+// Example:
+//
+//	type Config struct {
+//	    Debug *bool
+//	}
+//
+//	cfg := Config{
+//	    Debug: Ptr(true),
+//	}
+func Ptr[T any](v T) *T {
+	return &v
+}
+
+// Deref dereferences a pointer and returns the value it points to.
+// If the pointer is nil, it returns the zero value for the type.
+//
+// This function is useful when you want to safely dereference a pointer
+// without checking for nil, or when working with APIs that return pointers.
+//
+// Example:
+//
+//	type Config struct {
+//	    Debug *bool
+//	}
+//
+//	cfg := Config{
+//	    Debug: Ptr(true),
+//	}
+//
+//	debug := Deref(cfg.Debug) // debug is true
+//
+//	var nilPtr *bool
+//	defaultValue := Deref(nilPtr) // defaultValue is false
+func Deref[T any](ptr *T) T {
+	if ptr == nil {
+		var zero T
+		return zero
+	}
+	return *ptr
+}

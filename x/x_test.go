@@ -1722,3 +1722,96 @@ func TestMapToSlice(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestPtr(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		value := 42
+		ptr := x.Ptr(value)
+		assert.NotNil(t, ptr)
+		assert.Equal(t, value, *ptr)
+	})
+
+	t.Run("string", func(t *testing.T) {
+		value := "hello"
+		ptr := x.Ptr(value)
+		assert.NotNil(t, ptr)
+		assert.Equal(t, value, *ptr)
+	})
+
+	t.Run("bool", func(t *testing.T) {
+		value := true
+		ptr := x.Ptr(value)
+		assert.NotNil(t, ptr)
+		assert.Equal(t, value, *ptr)
+	})
+
+	t.Run("struct", func(t *testing.T) {
+		type TestStruct struct {
+			Field int
+		}
+		value := TestStruct{Field: 10}
+		ptr := x.Ptr(value)
+		assert.NotNil(t, ptr)
+		assert.Equal(t, value, *ptr)
+	})
+}
+
+func TestDeref(t *testing.T) {
+	t.Run("non-nil int pointer", func(t *testing.T) {
+		value := 42
+		ptr := &value
+		result := x.Deref(ptr)
+		assert.Equal(t, value, result)
+	})
+
+	t.Run("nil int pointer", func(t *testing.T) {
+		var ptr *int
+		result := x.Deref(ptr)
+		assert.Equal(t, 0, result)
+	})
+
+	t.Run("non-nil string pointer", func(t *testing.T) {
+		value := "hello"
+		ptr := &value
+		result := x.Deref(ptr)
+		assert.Equal(t, value, result)
+	})
+
+	t.Run("nil string pointer", func(t *testing.T) {
+		var ptr *string
+		result := x.Deref(ptr)
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("non-nil bool pointer", func(t *testing.T) {
+		value := true
+		ptr := &value
+		result := x.Deref(ptr)
+		assert.Equal(t, value, result)
+	})
+
+	t.Run("nil bool pointer", func(t *testing.T) {
+		var ptr *bool
+		result := x.Deref(ptr)
+		assert.Equal(t, false, result)
+	})
+
+	t.Run("non-nil struct pointer", func(t *testing.T) {
+		type TestStruct struct {
+			Field int
+		}
+		value := TestStruct{Field: 10}
+		ptr := &value
+		result := x.Deref(ptr)
+		assert.Equal(t, value, result)
+	})
+
+	t.Run("nil struct pointer", func(t *testing.T) {
+		type TestStruct struct {
+			Field int
+		}
+		var ptr *TestStruct
+		result := x.Deref(ptr)
+		assert.Equal(t, TestStruct{}, result)
+	})
+}

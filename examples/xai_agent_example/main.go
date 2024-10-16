@@ -19,7 +19,7 @@ func main() {
 	xlog.GreenLog(slog.LevelInfo, "Environment variables loaded")
 
 	// Initialize OpenAI client
-	client := xai.NewOpenAIClient(xai.WithDebug(true))
+	client := xai.NewOpenAIClient(xai.WithDebug(true), xai.WithHttpClientDebug(true))
 
 	// Define tools
 	tools := []xai.Tool{

@@ -19,6 +19,35 @@ func main() {
 
 	client := xai.NewOpenAIClient(xai.WithDebug(true))
 	xlog.GreenLog(slog.LevelInfo, "OpenAI client created with debug mode disabled")
+	resp, err := client.CreateChatCompletion(context.Background(), xai.CreateChatCompletionRequest{
+		Model: "gpt-4o-mini",
+		Messages: []xai.ChatCompletionMessage{
+			{
+				Role:    "system",
+				Content: "You are a helpful assistant that can answer questions and help with tasks.must return json",
+			},
+			{
+				Role:    "user",
+				Content: "My Name is John Doe and I am 30 years old",
+			},
+		},
+		ResponseFormat: &xai.ResponseFormat{
+			Type: "json_object",
+			JSONSchema: &xai.JSONSchemaFormat{
+				Description: "A JSON object with a name and age",
+				Name:        "Person",
+				Schema:      json.RawMessage(`{"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}}`),
+				Strict:      x.Ptr(true),
+			},
+		},
+	})
+	if err != nil {
+		xlog.RedLog(slog.LevelError, "Error creating chat completion", "error", err)
+		return
+	}
+
+	xlog.GreenLog(slog.LevelInfo, "Chat completion created", "response", x.MustToJSON(resp))
+	return
 
 	createChatCompletionResponse, err := client.CreateChatCompletion(context.Background(), xai.CreateChatCompletionRequest{
 		Model: xai.ModelGPT4o,
