@@ -2162,3 +2162,84 @@ func Deref[T any](ptr *T) T {
 	}
 	return *ptr
 }
+
+// MapToStruct converts a map[string]interface{} to a struct of type T.
+// It uses JSON marshaling and unmarshaling for the conversion.
+//
+// Parameters:
+// - data: the input map to be converted
+//
+// Returns:
+// - A value of type T containing the converted data
+// - An error if any issues occur during the conversion
+//
+// Example:
+//
+//	type User struct {
+//	    Name string `json:"name"`
+//	    Age  int    `json:"age"`
+//	}
+//
+//	data := map[string]interface{}{
+//	    "name": "Alice",
+//	    "age":  30,
+//	}
+//
+//	user, err := MapToStruct[User](data)
+//	if err != nil {
+//	    // handle error
+//	}
+//	fmt.Printf("%+v\n", user) // Output: {Name:Alice Age:30}
+func MapToStruct[T any](data map[string]interface{}) (T, error) {
+	var result T
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return result, xerror.Wrap(err, "failed to marshal map")
+	}
+
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		return result, xerror.Wrap(err, "failed to unmarshal into struct")
+	}
+
+	return result, nil
+}
+
+// StructToMap converts a struct to a map[string]interface{}.
+// It uses JSON tags to determine the key names in the resulting map.
+//
+// Parameters:
+// - v: the input struct to be converted
+//
+// Returns:
+// - A map[string]interface{} containing the struct fields
+// - An error if any issues occur during the conversion
+//
+// Example:
+//
+//	type User struct {
+//	    Name string `json:"name"`
+//	    Age  int    `json:"age"`
+//	}
+//
+//	user := User{Name: "Alice", Age: 30}
+//	result, err := StructToMap(user)
+//	if err != nil {
+//	    // handle error
+//	}
+//	fmt.Printf("%v\n", result) // Output: map[name:Alice age:30]
+func StructToMap(v interface{}) (map[string]interface{}, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to marshal struct")
+	}
+
+	var result map[string]interface{}
+	err = json.Unmarshal(data, &result)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to unmarshal into map")
+	}
+
+	return result, nil
+}

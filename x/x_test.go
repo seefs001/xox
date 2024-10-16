@@ -1815,3 +1815,209 @@ func TestDeref(t *testing.T) {
 		assert.Equal(t, TestStruct{}, result)
 	})
 }
+
+func TestMapToStruct(t *testing.T) {
+	t.Run("Basic struct conversion", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		data := map[string]interface{}{
+			"name": "Alice",
+			"age":  30,
+		}
+
+		result, err := x.MapToStruct[User](data)
+		assert.NoError(t, err)
+		assert.Equal(t, User{Name: "Alice", Age: 30}, result)
+	})
+
+	t.Run("Nested struct conversion", func(t *testing.T) {
+		type Address struct {
+			Street string `json:"street"`
+			City   string `json:"city"`
+		}
+		type User struct {
+			Name    string  `json:"name"`
+			Address Address `json:"address"`
+		}
+
+		data := map[string]interface{}{
+			"name": "Bob",
+			"address": map[string]interface{}{
+				"street": "123 Main St",
+				"city":   "Anytown",
+			},
+		}
+
+		result, err := x.MapToStruct[User](data)
+		assert.NoError(t, err)
+		expected := User{
+			Name: "Bob",
+			Address: Address{
+				Street: "123 Main St",
+				City:   "Anytown",
+			},
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("Partial data", func(t *testing.T) {
+		type User struct {
+			Name    string `json:"name"`
+			Age     int    `json:"age"`
+			Country string `json:"country"`
+		}
+
+		data := map[string]interface{}{
+			"name": "Charlie",
+			"age":  25,
+		}
+
+		result, err := x.MapToStruct[User](data)
+		assert.NoError(t, err)
+		assert.Equal(t, User{Name: "Charlie", Age: 25}, result)
+	})
+
+	t.Run("Type mismatch", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		data := map[string]interface{}{
+			"name": "David",
+			"age":  "thirty", // This should cause an error
+		}
+
+		_, err := x.MapToStruct[User](data)
+		assert.Error(t, err)
+	})
+
+	t.Run("Empty map", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		data := map[string]interface{}{}
+
+		result, err := x.MapToStruct[User](data)
+		assert.NoError(t, err)
+		assert.Equal(t, User{}, result)
+	})
+
+	t.Run("Nil map", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		var data map[string]interface{}
+
+		result, err := x.MapToStruct[User](data)
+		assert.NoError(t, err)
+		assert.Equal(t, User{}, result)
+	})
+}
+
+func TestStructToMap(t *testing.T) {
+	t.Run("Basic struct conversion", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		user := User{Name: "Alice", Age: 30}
+
+		result, err := x.StructToMap(user)
+		assert.NoError(t, err)
+		expected := map[string]interface{}{
+			"name": "Alice",
+			"age":  float64(30), // JSON numbers are floats
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("Nested struct conversion", func(t *testing.T) {
+		type Address struct {
+			Street string `json:"street"`
+			City   string `json:"city"`
+		}
+		type User struct {
+			Name    string  `json:"name"`
+			Address Address `json:"address"`
+		}
+
+		user := User{
+			Name: "Bob",
+			Address: Address{
+				Street: "123 Main St",
+				City:   "Anytown",
+			},
+		}
+
+		result, err := x.StructToMap(user)
+		assert.NoError(t, err)
+		expected := map[string]interface{}{
+			"name": "Bob",
+			"address": map[string]interface{}{
+				"street": "123 Main St",
+				"city":   "Anytown",
+			},
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("Struct with unexported fields", func(t *testing.T) {
+		type User struct {
+			Name string `json:"name"`
+			age  int    // unexported field
+		}
+
+		user := User{Name: "Charlie", age: 25}
+
+		result, err := x.StructToMap(user)
+		assert.NoError(t, err)
+		expected := map[string]interface{}{
+			"name": "Charlie",
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("Struct with custom types", func(t *testing.T) {
+		type CustomInt int
+		type User struct {
+			Name string    `json:"name"`
+			Age  CustomInt `json:"age"`
+		}
+
+		user := User{Name: "David", Age: CustomInt(40)}
+
+		result, err := x.StructToMap(user)
+		assert.NoError(t, err)
+		expected := map[string]interface{}{
+			"name": "David",
+			"age":  float64(40), // JSON numbers are floats
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("Empty struct", func(t *testing.T) {
+		type EmptyStruct struct{}
+
+		empty := EmptyStruct{}
+
+		result, err := x.StructToMap(empty)
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("Non-struct input", func(t *testing.T) {
+		input := 42
+
+		_, err := x.StructToMap(input)
+		assert.Error(t, err)
+	})
+}

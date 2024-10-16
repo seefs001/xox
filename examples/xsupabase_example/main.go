@@ -100,6 +100,21 @@ func main() {
 	}
 	xlog.Info("Selected users", "response", selectResp)
 
+	userMap, err := x.StructToMap(selectResp[0])
+	if err != nil {
+		xlog.Error("Failed to convert user to map", "error", err)
+		return
+	}
+	xlog.Info("User converted to map", "map", x.MustToJSON(userMap))
+
+	user, err := x.MapToStruct[User](userMap)
+	if err != nil {
+		xlog.Error("Failed to convert user to struct", "error", err)
+		return
+	}
+	xlog.Info("User converted to struct", "struct", user)
+	return
+
 	// Update a user
 	if len(selectResp) > 0 {
 		userID := selectResp[0]["id"]
