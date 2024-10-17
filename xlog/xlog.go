@@ -24,6 +24,7 @@ var (
 	logConfig      LogConfig
 	defaultLevel   slog.Level
 	handlers       []slog.Handler
+	mu             sync.RWMutex // Added mutex for thread-safe access
 )
 
 // LogConfig represents the configuration for logging.
@@ -46,6 +47,9 @@ func init() {
 
 // SetLogConfig sets the logging configuration.
 func SetLogConfig(config LogConfig) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	logConfig = config
 	defaultLevel = config.Level
 	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
@@ -56,6 +60,9 @@ func SetLogConfig(config LogConfig) {
 
 // SetDefaultLogLevel sets the default logging level.
 func SetDefaultLogLevel(level slog.Level) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	defaultLevel = level
 	defaultHandler = x.Must1(NewColorConsoleHandler(os.Stdout, &slog.HandlerOptions{
 		Level: defaultLevel,
@@ -103,8 +110,23 @@ func Errorf(format string, args ...any) {
 	log(slog.LevelError, fmt.Sprintf(format, args...))
 }
 
+// Fatal logs a fatal error message and then calls os.Exit(1).
+func Fatal(msg string, args ...any) {
+	log(slog.LevelError, msg, args...)
+	os.Exit(1)
+}
+
+// Fatalf logs a formatted fatal error message and then calls os.Exit(1).
+func Fatalf(format string, args ...any) {
+	log(slog.LevelError, fmt.Sprintf(format, args...))
+	os.Exit(1)
+}
+
 // log is a helper function to add file and line information if configured
 func log(level slog.Level, msg string, args ...any) {
+	mu.RLock()
+	defer mu.RUnlock()
+
 	if logConfig.IncludeFileAndLine {
 		_, file, line, ok := runtime.Caller(2)
 		if ok {
@@ -258,6 +280,9 @@ func SetConsoleMaxLengths(maxMessageLen, maxAttrLen int) {
 
 // Add adds a new handler to the existing handlers
 func Add(handler slog.Handler) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	handlers = append(handlers, handler)
 	if mh, ok := defaultHandler.(*MultiHandler); ok {
 		// If defaultHandler is already a MultiHandler, add the new handler to it
@@ -361,7 +386,7 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 		lastRotate: time.Now(),
 		logChan:    make(chan slog.Record, 1000),
 		done:       make(chan struct{}),
-		rotateSize: config.MaxSize / 2, // Set initial rotate size to half of MaxSize
+		rotateSize: config.MaxSize, // Changed initial rotate size to MaxSize
 		currentNum: 1,
 	}
 
@@ -392,7 +417,7 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 		}
 	}
 
-	if h.size >= h.rotateSize {
+	if h.shouldRotate() {
 		if err := h.rotate(); err != nil {
 			return err
 		}
@@ -412,7 +437,7 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 	return nil
 }
 
-// run runs the background worker.
+// run handles periodic flushing and listens for shutdown signal.
 func (h *RotatingFileHandler) run() {
 	for {
 		select {
@@ -423,6 +448,11 @@ func (h *RotatingFileHandler) run() {
 			}
 			h.mu.Unlock()
 		case <-h.done:
+			h.mu.Lock()
+			if h.buffer != nil {
+				h.buffer.Flush()
+			}
+			h.mu.Unlock()
 			return
 		}
 	}
@@ -433,7 +463,7 @@ func (h *RotatingFileHandler) shouldRotate() bool {
 	return h.size >= h.config.MaxSize || !isSameDay(h.lastRotate, time.Now()) || h.writeCount >= 10
 }
 
-// isSameDay checks if two times are in the same day
+// isSameDay checks if two times are on the same day.
 func isSameDay(t1, t2 time.Time) bool {
 	y1, m1, d1 := t1.Date()
 	y2, m2, d2 := t2.Date()
@@ -450,6 +480,7 @@ func (h *RotatingFileHandler) updateFileSize() {
 // rotate rotates the log file.
 func (h *RotatingFileHandler) rotate() error {
 	if h.file != nil {
+		h.buffer.Flush()
 		h.file.Close()
 	}
 
@@ -468,7 +499,7 @@ func (h *RotatingFileHandler) rotate() error {
 
 	h.file = newFile
 	h.size = 0
-	h.rotateSize = h.config.MaxSize
+	h.lastRotate = time.Now()
 	h.currentNum++
 
 	h.removeOldFiles()
@@ -528,16 +559,20 @@ func AddRotatingFile(config FileConfig) error {
 		return xerror.Wrap(err, "failed to create rotating file handler")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
+	handlers = append(handlers, handler)
+
 	var newHandler slog.Handler
 	if mh, ok := defaultHandler.(*MultiHandler); ok {
 		// If defaultHandler is already a MultiHandler, add the new handler to it
-		newHandlers := append(mh.handlers, handler)
-		newHandler = NewMultiHandler(newHandlers...)
+		mh.handlers = append(mh.handlers, handler)
+		newHandler = mh
 	} else {
 		// If not, create a new MultiHandler with both handlers
 		newHandler = NewMultiHandler(defaultHandler, handler)
 	}
-
 	defaultHandler = newHandler
 	defaultLogger = slog.New(defaultHandler)
 	return nil
@@ -557,8 +592,16 @@ type ShutdownHandler interface {
 
 // Shutdown shuts down all handlers that implement the ShutdownHandler interface.
 func Shutdown() error {
+	mu.Lock()
+	defer mu.Unlock()
+
 	var errs []error
 	for _, handler := range handlers {
+		if closer, ok := handler.(ShutdownHandler); ok {
+			if err := closer.Shutdown(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to shutdown handler: %w", err))
+			}
+		}
 		if closer, ok := handler.(io.Closer); ok {
 			if err := closer.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to close handler: %w", err))
@@ -573,6 +616,9 @@ func Shutdown() error {
 
 // SetLogger sets the default logger
 func SetLogger(logger *slog.Logger) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	defaultLogger = logger
 	defaultHandler = logger.Handler()
 }
@@ -637,16 +683,20 @@ func AddFixedFile(filename string, level slog.Level) error {
 		return xerror.Wrap(err, "failed to create fixed file handler")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
+	handlers = append(handlers, handler)
+
 	var newHandler slog.Handler
 	if mh, ok := defaultHandler.(*MultiHandler); ok {
 		// If defaultHandler is already a MultiHandler, add the new handler to it
-		newHandlers := append(mh.handlers, handler)
-		newHandler = NewMultiHandler(newHandlers...)
+		mh.handlers = append(mh.handlers, handler)
+		newHandler = mh
 	} else {
 		// If not, create a new MultiHandler with both handlers
 		newHandler = NewMultiHandler(defaultHandler, handler)
 	}
-
 	defaultHandler = newHandler
 	defaultLogger = slog.New(defaultHandler)
 	return nil
