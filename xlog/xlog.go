@@ -780,3 +780,42 @@ func CyanLog(level slog.Level, msg string, args ...any) {
 func CyanLogf(level slog.Level, format string, args ...any) {
 	ColorLogf(level, xcolor.Cyan, format, args...)
 }
+
+// DebugContext logs a debug message with context.
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	logContext(ctx, slog.LevelDebug, msg, args...)
+}
+
+// InfoContext logs an info message with context.
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	logContext(ctx, slog.LevelInfo, msg, args...)
+}
+
+// WarnContext logs a warning message with context.
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	logContext(ctx, slog.LevelWarn, msg, args...)
+}
+
+// ErrorContext logs an error message with context.
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	logContext(ctx, slog.LevelError, msg, args...)
+}
+
+// logContext is a helper function to add file and line information if configured, with context
+func logContext(ctx context.Context, level slog.Level, msg string, args ...any) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if logConfig.IncludeFileAndLine {
+		_, file, line, ok := runtime.Caller(2)
+		if ok {
+			rel, err := filepath.Rel(filepath.Dir(file), file)
+			if err == nil {
+				file = rel
+			}
+			fileInfo := fmt.Sprintf("%s:%d", file, line)
+			args = append(args, "source", fileInfo)
+		}
+	}
+	defaultLogger.LogAttrs(ctx, level, msg, slog.Any("args", args))
+}

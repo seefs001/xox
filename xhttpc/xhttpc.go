@@ -1263,3 +1263,174 @@ func (c *Client) doRequestWithBody(ctx context.Context, method, url string, body
 
 	return c.doRequest(req)
 }
+
+// Request represents an HTTP request and provides methods for building and executing it
+type Request struct {
+	client      *Client
+	httpRequest *http.Request
+	response    *http.Response
+	body        []byte
+	err         error
+	receivedAt  time.Time
+}
+
+// NewRequest creates a new Request object for building and executing a request
+func (c *Client) NewRequest() *Request {
+	return &Request{
+		client: c,
+		httpRequest: &http.Request{
+			Header: make(http.Header),
+			URL:    &url.URL{},
+		},
+	}
+}
+
+// SetBody sets the request body
+func (r *Request) SetBody(body interface{}) *Request {
+	switch v := body.(type) {
+	case string:
+		r.httpRequest.Body = io.NopCloser(strings.NewReader(v))
+	case []byte:
+		r.httpRequest.Body = io.NopCloser(bytes.NewReader(v))
+	case io.Reader:
+		r.httpRequest.Body = io.NopCloser(v)
+	default:
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			r.err = xerror.Wrap(err, "failed to marshal request body")
+			return r
+		}
+		r.httpRequest.Body = io.NopCloser(bytes.NewReader(jsonBody))
+		r.httpRequest.Header.Set("Content-Type", "application/json")
+	}
+	return r
+}
+
+// SetHeader sets a header for the request
+func (r *Request) SetHeader(key, value string) *Request {
+	r.httpRequest.Header.Set(key, value)
+	return r
+}
+
+// SetQueryParam sets a query parameter for the request
+func (r *Request) SetQueryParam(key, value string) *Request {
+	q := r.httpRequest.URL.Query()
+	q.Set(key, value)
+	r.httpRequest.URL.RawQuery = q.Encode()
+	return r
+}
+
+// Get sends a GET request
+func (r *Request) Get(ctx context.Context, url string) *Request {
+	return r.Execute(ctx, http.MethodGet, url)
+}
+
+// Post sends a POST request
+func (r *Request) Post(ctx context.Context, url string) *Request {
+	return r.Execute(ctx, http.MethodPost, url)
+}
+
+// Put sends a PUT request
+func (r *Request) Put(ctx context.Context, url string) *Request {
+	return r.Execute(ctx, http.MethodPut, url)
+}
+
+// Patch sends a PATCH request
+func (r *Request) Patch(ctx context.Context, url string) *Request {
+	return r.Execute(ctx, http.MethodPatch, url)
+}
+
+// Delete sends a DELETE request
+func (r *Request) Delete(ctx context.Context, url string) *Request {
+	return r.Execute(ctx, http.MethodDelete, url)
+}
+
+// Execute sends the request
+func (r *Request) Execute(ctx context.Context, method, url string) *Request {
+	if r.err != nil {
+		return r
+	}
+
+	fullURL := url
+	if !isAbsoluteURL(url) && r.client.baseURL != "" {
+		fullURL = r.client.baseURL + url
+	}
+
+	req, err := r.client.createRequest(ctx, method, fullURL, r.httpRequest.Body)
+	if err != nil {
+		r.err = err
+		return r
+	}
+
+	// Copy headers from r.httpRequest to req
+	for key, values := range r.httpRequest.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	// Copy query parameters from r.httpRequest to req
+	req.URL.RawQuery = r.httpRequest.URL.RawQuery
+
+	r.httpRequest = req
+	r.response, r.err = r.client.doRequest(req)
+	r.receivedAt = time.Now()
+
+	if r.err == nil {
+		r.body, r.err = io.ReadAll(r.response.Body)
+		r.response.Body.Close()
+		r.response.Body = io.NopCloser(bytes.NewBuffer(r.body))
+	}
+
+	return r
+}
+
+// Result stores the response body into the provided interface
+func (r *Request) Result(v interface{}) error {
+	if r.err != nil {
+		return r.err
+	}
+	return json.Unmarshal(r.body, v)
+}
+
+// String returns the response body as a string
+func (r *Request) String() string {
+	if r.err != nil {
+		return ""
+	}
+	return string(r.body)
+}
+
+// Bytes returns the response body as a byte slice
+func (r *Request) Bytes() []byte {
+	if r.err != nil {
+		return nil
+	}
+	return r.body
+}
+
+// Error returns any error that occurred during the request
+func (r *Request) Error() error {
+	return r.err
+}
+
+// StatusCode returns the response status code
+func (r *Request) StatusCode() int {
+	if r.response == nil {
+		return 0
+	}
+	return r.response.StatusCode
+}
+
+// Header returns the response headers
+func (r *Request) Header() http.Header {
+	if r.response == nil {
+		return nil
+	}
+	return r.response.Header
+}
+
+// Time returns the time when the response was received
+func (r *Request) Time() time.Time {
+	return r.receivedAt
+}
