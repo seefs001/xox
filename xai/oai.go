@@ -67,17 +67,6 @@ type ChatCompletionChunk struct {
 	Error    error
 }
 
-// Common structures moved from xai.go to oai.go
-
-// ChatCompletionMessage represents a message in the chat completion
-type ChatCompletionMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	Image      string     `json:"image,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
 // ToolCall represents a tool call in the chat completion response
 type ToolCall struct {
 	ID       string       `json:"id"`
@@ -110,14 +99,7 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-type Choice struct {
-	Message      ChatCompletionMessage `json:"message"`
-	FinishReason string                `json:"finish_reason"`
-	Index        int                   `json:"index"`
-	Logprobs     interface{}           `json:"logprobs"`
-}
-
-// Update CreateChatCompletionRequest to include response_format
+// CreateChatCompletionRequest represents the request structure for creating a chat completion
 type CreateChatCompletionRequest struct {
 	Model          string                  `json:"model"`
 	Messages       []ChatCompletionMessage `json:"messages"`
@@ -130,6 +112,22 @@ type CreateChatCompletionRequest struct {
 	Tools          []Tool                  `json:"tools,omitempty"`
 	ToolChoice     string                  `json:"tool_choice,omitempty"`
 	ResponseFormat *ResponseFormat         `json:"response_format,omitempty"`
+	// Modalities specifies the output types for the model to generate.
+	// Default is ["text"]. For audio-capable models, use ["text", "audio"].
+	Modalities []string `json:"modalities,omitempty"`
+	// Audio contains parameters for audio output. Required when audio output is requested.
+	Audio *AudioParams `json:"audio,omitempty"`
+	// PresencePenalty is a number between -2.0 and 2.0. Positive values penalize new tokens
+	// based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics.
+	PresencePenalty float32 `json:"presence_penalty,omitempty"`
+}
+
+// AudioParams represents the parameters for audio output
+type AudioParams struct {
+	// Voice specifies the voice type. Supported voices are alloy, echo, fable, onyx, nova, and shimmer.
+	Voice string `json:"voice"`
+	// Format specifies the output audio format. Must be one of wav, mp3, flac, opus, or pcm16.
+	Format string `json:"format"`
 }
 
 // ResponseFormat specifies the format that the model must output.
@@ -165,19 +163,46 @@ type JSONSchemaFormat struct {
 
 // CreateChatCompletionResponse represents the response from the OpenAI API for chat completion requests.
 type CreateChatCompletionResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
+	// ID is a unique identifier for the chat completion.
+	ID string `json:"id"`
+
+	// Object is the object type, which is always "chat.completion".
+	Object string `json:"object"`
+
+	// Created is the Unix timestamp (in seconds) of when the chat completion was created.
+	Created int64 `json:"created"`
+
+	// Model is the name of the model used for the chat completion.
+	Model string `json:"model"`
+
+	// Choices is a list of chat completion choices. Can be more than one if n is greater than 1.
 	Choices []Choice `json:"choices"`
-	Usage   struct {
-		PromptTokens            int `json:"prompt_tokens"`
-		CompletionTokens        int `json:"completion_tokens"`
-		TotalTokens             int `json:"total_tokens"`
+
+	// Usage contains usage statistics for the completion request.
+	Usage struct {
+		// PromptTokens is the number of tokens in the prompt.
+		PromptTokens int `json:"prompt_tokens"`
+
+		// CompletionTokens is the number of tokens in the generated completion.
+		CompletionTokens int `json:"completion_tokens"`
+
+		// TotalTokens is the total number of tokens used in the request (prompt + completion).
+		TotalTokens int `json:"total_tokens"`
+
+		// CompletionTokensDetails contains additional details about completion tokens.
 		CompletionTokensDetails struct {
+			// ReasoningTokens is the number of tokens used for reasoning (if applicable).
 			ReasoningTokens int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
 	} `json:"usage"`
+
+	// SystemFingerprint represents the backend configuration that the model runs with.
+	// Can be used with the seed parameter to understand when backend changes might impact determinism.
+	SystemFingerprint string `json:"system_fingerprint,omitempty"`
+
+	// ServiceTier is the service tier used for processing the request.
+	// This field is only included if the service_tier parameter is specified in the request.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // CreateChatCompletion creates a chat completion
@@ -599,4 +624,41 @@ type CreateTranscriptionRequest struct {
 	Prompt         string  `json:"prompt,omitempty"`
 	ResponseFormat string  `json:"response_format,omitempty"`
 	Temperature    float32 `json:"temperature,omitempty"`
+}
+
+// Choice represents a single chat completion choice.
+type Choice struct {
+	// Message is the chat completion message generated by the model.
+	Message ChatCompletionMessage `json:"message"`
+
+	// FinishReason is the reason the model stopped generating tokens.
+	// Possible values: "stop", "length", "content_filter", "tool_calls", or "function_call" (deprecated).
+	FinishReason string `json:"finish_reason"`
+
+	// Index is the index of the choice in the list of choices.
+	Index int `json:"index"`
+
+	// Logprobs contains log probability information for the choice (if requested).
+	Logprobs interface{} `json:"logprobs"`
+}
+
+// ChatCompletionMessage represents a message in the chat completion.
+type ChatCompletionMessage struct {
+	// Role is the role of the author of this message (e.g., "assistant").
+	Role string `json:"role"`
+
+	// Content is the text content of the message.
+	Content string `json:"content,omitempty"`
+
+	// Image is the image content of the message (if applicable).
+	Image string `json:"image,omitempty"`
+
+	// ToolCalls contains the tool calls generated by the model, such as function calls.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+
+	// ToolCallID is the ID of the tool call this message is responding to (if applicable).
+	ToolCallID string `json:"tool_call_id,omitempty"`
+
+	// Refusal is the refusal message generated by the model (if applicable).
+	Refusal string `json:"refusal,omitempty"`
 }
