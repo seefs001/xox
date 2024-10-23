@@ -374,6 +374,10 @@ func (c *OpenAIClient) GenerateTextStream(ctx context.Context, options TextGener
 }
 
 func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string, body map[string]interface{}, isMidjourney bool) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var resp *http.Response
 	var err error
 
@@ -400,8 +404,13 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 		return nil, xerror.Wrap(err, "error sending request")
 	}
 
+	if resp == nil {
+		return nil, xerror.New("received nil response")
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		return nil, xerror.Newf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -409,12 +418,24 @@ func (c *OpenAIClient) sendRequest(ctx context.Context, method, endpoint string,
 }
 
 func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Response, textChan chan<- string, errChan chan<- error, chunkSize int) {
+	if resp == nil || resp.Body == nil {
+		errChan <- xerror.New("invalid response or response body")
+		return
+	}
+
 	reader := bufio.NewReader(resp.Body)
 	buffer := strings.Builder{}
 
 	if chunkSize <= 0 {
 		chunkSize = DefaultChunkSize
 	}
+
+	defer func() {
+		resp.Body.Close()
+		if r := recover(); r != nil {
+			errChan <- xerror.Newf("panic in stream handler: %v", r)
+		}
+	}()
 
 	for {
 		select {
@@ -450,9 +471,11 @@ func (c *OpenAIClient) handleStreamResponse(ctx context.Context, resp *http.Resp
 				return
 			}
 
-			if len(streamResponse.Response.Choices) > 0 && streamResponse.Response.Choices[0].Delta.Content != "" {
+			if streamResponse.Response != nil &&
+				len(streamResponse.Response.Choices) > 0 &&
+				streamResponse.Response.Choices[0].Delta.Content != "" {
 				buffer.WriteString(streamResponse.Response.Choices[0].Delta.Content)
-				if buffer.Len() > 0 {
+				if buffer.Len() >= chunkSize {
 					select {
 					case textChan <- buffer.String():
 						buffer.Reset()

@@ -105,21 +105,26 @@ func (c *Client) SetDebug(debug bool) {
 type SupabaseResponse struct {
 	Data   json.RawMessage `json:"data"`
 	Error  *ErrorResponse  `json:"error,omitempty"`
-	Status int             `json:"status"`
+	Status int
+	Raw    []byte // Store raw response for debugging
 }
 
 // execute sends an HTTP request to the Supabase API
 func (c *Client) execute(ctx context.Context, method, path string, body interface{}) (*SupabaseResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	url := fmt.Sprintf("%s%s", c.projectURL, path)
 
 	c.httpClient.SetHeader("apikey", c.apiKey)
 	c.httpClient.SetHeader("Authorization", "Bearer "+c.apiKey)
 	c.httpClient.SetHeader("Content-Type", "application/json")
+	c.httpClient.SetHeader("Accept", "application/json")
 
 	var resp *http.Response
 	var err error
 
-	// Log request details
 	if c.debug {
 		logRequest(method, url, body)
 	}
@@ -132,6 +137,8 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 			resp, err = c.httpClient.Post(ctx, url, body)
 		case http.MethodPatch:
 			resp, err = c.httpClient.Patch(ctx, url, body)
+		case http.MethodPut:
+			resp, err = c.httpClient.Put(ctx, url, body)
 		case http.MethodDelete:
 			resp, err = c.httpClient.Delete(ctx, url)
 		default:
@@ -140,8 +147,7 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 		return err
 	}
 
-	err = operation()
-	if err != nil {
+	if err = operation(); err != nil {
 		return nil, xerror.Wrap(err, "error executing request")
 	}
 	defer resp.Body.Close()
@@ -154,20 +160,27 @@ func (c *Client) execute(ctx context.Context, method, path string, body interfac
 	supaResp := &SupabaseResponse{
 		Status: resp.StatusCode,
 		Data:   respBody,
+		Raw:    respBody,
 	}
 
-	var errResp ErrorResponse
-	if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Code != nil {
-		supaResp.Error = &errResp
+	if len(respBody) > 0 {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Code != nil {
+			supaResp.Error = &errResp
+		}
 	}
 
-	// Log response details
 	if c.debug {
 		logResponse(supaResp)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return supaResp, xerror.NewWithCode(fmt.Sprintf("API error: %s (code: %v, error_code: %s)", errResp.Message, errResp.Code, errResp.ErrorCode), resp.StatusCode)
+		errMsg := "API error"
+		if supaResp.Error != nil {
+			errMsg = fmt.Sprintf("API error: %s (code: %v, error_code: %s)",
+				supaResp.Error.Message, supaResp.Error.Code, supaResp.Error.ErrorCode)
+		}
+		return supaResp, xerror.NewWithCode(errMsg, resp.StatusCode)
 	}
 
 	return supaResp, nil
@@ -880,4 +893,62 @@ func (c *Client) GetProjectSettings(ctx context.Context) (map[string]interface{}
 	}
 
 	return settings, nil
+}
+
+// SelectOne retrieves a single record from the specified table
+func (c *Client) SelectOne(ctx context.Context, table string, params QueryParams) (Record, error) {
+	params.Limit = 1
+	records, err := c.Select(ctx, table, params)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, xerror.NewWithCode("record not found", http.StatusNotFound)
+	}
+	return records[0], nil
+}
+
+// BulkInsert inserts multiple records into the specified table
+func (c *Client) BulkInsert(ctx context.Context, table string, records []Record) ([]Record, error) {
+	if len(records) == 0 {
+		return nil, xerror.New("no records provided")
+	}
+
+	path := fmt.Sprintf("/rest/v1/%s", table)
+	supaResp, err := c.execute(ctx, http.MethodPost, path, records)
+	if err != nil {
+		return nil, err
+	}
+
+	var insertedRecords []Record
+	if err := json.Unmarshal(supaResp.Data, &insertedRecords); err != nil {
+		return nil, xerror.Wrapf(err, "error unmarshaling response")
+	}
+
+	return insertedRecords, nil
+}
+
+// UpdateWhere updates records matching the filter condition
+func (c *Client) UpdateWhere(ctx context.Context, table string, filter string, updates Record) ([]Record, error) {
+	path := fmt.Sprintf("/rest/v1/%s?%s", table, filter)
+
+	supaResp, err := c.execute(ctx, http.MethodPatch, path, updates)
+	if err != nil {
+		return nil, err
+	}
+
+	var updatedRecords []Record
+	if err := json.Unmarshal(supaResp.Data, &updatedRecords); err != nil {
+		return nil, xerror.Wrapf(err, "error unmarshaling response")
+	}
+
+	return updatedRecords, nil
+}
+
+// DeleteWhere deletes records matching the filter condition
+func (c *Client) DeleteWhere(ctx context.Context, table string, filter string) error {
+	path := fmt.Sprintf("/rest/v1/%s?%s", table, filter)
+
+	_, err := c.execute(ctx, http.MethodDelete, path, nil)
+	return err
 }

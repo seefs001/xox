@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -38,6 +39,8 @@ type App struct {
 	CustomErrorPrinter       func(err error)
 	CustomHelpPrinter        func(app *App)
 	CustomCommandHelpPrinter func(app *App, cmdName string)
+	initialized              bool
+	mutex                    sync.RWMutex
 }
 
 // Command represents a CLI command
@@ -64,10 +67,19 @@ func NewApp(name, description, version string) *App {
 
 // AddCommand adds a new command to the application
 func (a *App) AddCommand(cmd *Command) {
+	if cmd == nil {
+		return
+	}
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
 	if _, exists := a.Commands[cmd.Name]; !exists {
+		if a.Commands == nil {
+			a.Commands = make(map[string]*Command)
+		}
 		a.Commands[cmd.Name] = cmd
 		for _, alias := range cmd.Aliases {
-			if _, exists := a.Commands[alias]; !exists {
+			if alias != "" && alias != cmd.Name {
 				a.Commands[alias] = cmd
 			}
 		}
@@ -101,6 +113,18 @@ func (a *App) SetUnknownCommandHandler(handler func(ctx context.Context, cmdName
 
 // Run executes the application
 func (a *App) Run(ctx context.Context, args []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("no arguments provided")
+	}
+
+	if !a.initialized {
+		a.Initialize()
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			xlog.Errorf("Panic recovered: %v", r)
@@ -180,9 +204,17 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 // runCommand executes a command and its subcommands if any
 func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error {
-	// Parse flags for the current command
+	if cmd == nil {
+		return fmt.Errorf("nil command provided")
+	}
+
+	if cmd.Run == nil {
+		return fmt.Errorf("command %s has no run function", cmd.Name)
+	}
+
 	if cmd.Flags == nil {
 		cmd.Flags = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
+		cmd.Flags.SetOutput(io.Discard)
 	}
 	if err := cmd.Flags.Parse(args); err != nil {
 		return err
@@ -350,13 +382,40 @@ func (a *App) suggestCommands(input string) []string {
 
 // Initialize sets up the global flags
 func (a *App) Initialize() {
-	a.Flags = flag.NewFlagSet(a.Name, flag.ContinueOnError)
-	a.Flags.SetOutput(io.Discard) // Prevent the flag package from writing to stderr
-	a.Flags.Usage = func() {
-		a.PrintHelp()
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	if a.initialized {
+		return
 	}
-	a.Flags.Bool("help", false, "Display help information")
-	a.Flags.Bool("h", false, "Display help information")
-	a.Flags.Bool("version", false, "Display version information")
-	a.Flags.Bool("v", false, "Display version information")
+
+	if a.Flags == nil {
+		a.Flags = flag.NewFlagSet(a.Name, flag.ExitOnError)
+		a.Flags.SetOutput(io.Discard)
+		a.Flags.Usage = func() { a.PrintHelp() }
+		a.Flags.Bool("help", false, "Display help information")
+		a.Flags.Bool("h", false, "Display help information")
+		a.Flags.Bool("version", false, "Display version information")
+		a.Flags.Bool("v", false, "Display version information")
+	}
+
+	a.initialized = true
+}
+
+func (a *App) GetCommand(name string) (*Command, bool) {
+	a.mutex.RLock()
+	defer a.mutex.RUnlock()
+	cmd, exists := a.Commands[name]
+	return cmd, exists
+}
+
+func (a *App) RemoveCommand(name string) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if cmd, exists := a.Commands[name]; exists {
+		for _, alias := range cmd.Aliases {
+			delete(a.Commands, alias)
+		}
+		delete(a.Commands, name)
+	}
 }

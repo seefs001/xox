@@ -91,27 +91,38 @@ func toJSONBody(v interface{}) (xhttpc.JSONBody, error) {
 
 // handleAPIError checks if the error is an API error and returns it as an APIError
 func handleAPIError(err error) error {
+	var apiErr APIError
+	if xerror.As(err, &apiErr) {
+		return &apiErr
+	}
 	return err
 }
 
 // sendRequest is a helper function to send requests and handle responses
 func (c *Client) sendRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var resp *http.Response
 	var err error
 
 	switch method {
-	case "GET":
+	case http.MethodGet:
 		resp, err = c.httpClient.Get(ctx, path)
-	case "POST":
+	case http.MethodPost:
 		resp, err = c.httpClient.Post(ctx, path, body)
-	case "DELETE":
+	case http.MethodDelete:
 		resp, err = c.httpClient.Delete(ctx, path)
 	default:
-		return nil, xerror.New("unsupported HTTP method")
+		return nil, xerror.Newf("unsupported HTTP method: %s", method)
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "request failed")
+	}
+	if resp == nil {
+		return nil, xerror.New("empty response")
 	}
 	defer resp.Body.Close()
 
@@ -120,7 +131,6 @@ func (c *Client) sendRequest(ctx context.Context, method, path string, body inte
 		return nil, xerror.Wrap(err, "failed to read response body")
 	}
 
-	// Try to unmarshal as APIError first
 	var apiError APIError
 	if err := json.Unmarshal(respBody, &apiError); err == nil && apiError.Message != "" {
 		return nil, &apiError
@@ -407,6 +417,10 @@ func (c *Client) DeleteAudience(ctx context.Context, audienceID string) error {
 
 // CreateContact creates a new contact in an audience
 func (c *Client) CreateContact(ctx context.Context, audienceID string, req CreateContactRequest) (*CreateContactResponse, error) {
+	if audienceID == "" {
+		return nil, xerror.New("audienceID cannot be empty")
+	}
+
 	if c.debug {
 		xlog.Debug("Creating contact", "audienceID", audienceID, "request", req)
 	}
@@ -414,11 +428,12 @@ func (c *Client) CreateContact(ctx context.Context, audienceID string, req Creat
 	var resp CreateContactResponse
 	body, err := toJSONBody(req)
 	if err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to prepare request body")
 	}
+
 	err = c.httpClient.PostJSONAndDecode(ctx, fmt.Sprintf("/audiences/%s/contacts", audienceID), body, &resp)
 	if err != nil {
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to create contact")
 	}
 
 	if c.debug {

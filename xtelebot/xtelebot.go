@@ -206,18 +206,21 @@ func (b *Bot) APIRequestWithObject(ctx context.Context, method string, params in
 }
 
 func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if params == nil {
+		params = url.Values{}
+	}
+
 	if b.debug {
 		xlog.Debug("Sending API request", "method", method, "params", params)
 	}
 
-	b.rateLimiter.Wait() // Wait for rate limiting
+	b.rateLimiter.Wait()
 
-	var url string
-	// if b.isTestServer {
-	// 	url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
-	// } else {
-	url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
-	// }
+	url := fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
 
 	ctx, cancel := context.WithTimeout(ctx, b.requestTimeout)
 	defer cancel()
@@ -228,7 +231,7 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 	if x.Contains(urlValuesMethods, method) {
 		resp, err = b.client.PostURLEncoded(ctx, url, xhttpc.URLEncodedForm(params))
 	} else {
-		formData := make(xhttpc.FormData)
+		formData := make(xhttpc.FormData, len(params))
 		for key, values := range params {
 			if len(values) > 0 {
 				formData[key] = values[0]
@@ -238,25 +241,27 @@ func (b *Bot) APIRequest(ctx context.Context, method string, params url.Values) 
 	}
 
 	if err != nil {
-		b.errorHandler(fmt.Errorf("failed to send request: %w", err))
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to send request")
+	}
+	if resp == nil {
+		return nil, xerror.New("empty response received")
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		b.errorHandler(fmt.Errorf("failed to read response body: %w", err))
-		return nil, err
+		return nil, xerror.Wrap(err, "failed to read response body")
 	}
 
 	if b.debug {
-		xlog.Debug("API response received", "status", resp.StatusCode, "body", string(body))
+		xlog.Debug("API response received",
+			"method", method,
+			"status", resp.StatusCode,
+			"body", string(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		err := fmt.Errorf("API request failed with status code %d: %s", resp.StatusCode, string(body))
-		b.errorHandler(err)
-		return nil, err
+		return nil, xerror.Newf("API request failed with status code %d: %s", resp.StatusCode, string(body))
 	}
 
 	return body, nil
@@ -1262,47 +1267,59 @@ func (b *Bot) GetUpdatesChan(ctx context.Context, offset int, limit int) (<-chan
 
 // uploadFile uploads a file using multipart/form-data
 func (b *Bot) uploadFile(ctx context.Context, method string, params url.Values, fieldName string, fileName string, fileData io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if params == nil {
+		params = url.Values{}
+	}
+
+	if fileData == nil {
+		return nil, xerror.New("file data cannot be nil")
+	}
+
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	// Add the file
 	part, err := writer.CreateFormFile(fieldName, fileName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create form file: %w", err)
-	}
-	_, err = io.Copy(part, fileData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy file data: %w", err)
+		return nil, xerror.Wrap(err, "failed to create form file")
 	}
 
-	// Add other fields
+	if _, err = io.Copy(part, fileData); err != nil {
+		return nil, xerror.Wrap(err, "failed to copy file data")
+	}
+
 	for key, values := range params {
 		for _, value := range values {
-			err := writer.WriteField(key, value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to write field: %w", err)
+			if err := writer.WriteField(key, value); err != nil {
+				return nil, xerror.Wrap(err, "failed to write field")
 			}
 		}
 	}
 
-	err = writer.Close()
-	if err != nil {
-		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	if err = writer.Close(); err != nil {
+		return nil, xerror.Wrap(err, "failed to close multipart writer")
 	}
 
-	var url string
-	// if b.isTestServer {
-	// 	url = fmt.Sprintf("%s%s/test/%s", b.baseURL, b.token, method)
-	// } else {
-	url = fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
-	// }
+	url := fmt.Sprintf("%s%s/%s", b.baseURL, b.token, method)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, xerror.Wrap(err, "failed to create request")
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	return b.client.Do(req)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to send request")
+	}
+
+	if resp == nil {
+		return nil, xerror.New("empty response received")
+	}
+
+	return resp, nil
 }

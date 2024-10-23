@@ -59,7 +59,7 @@ type LoggerConfig struct {
 func Logger(config ...LoggerConfig) Middleware {
 	cfg := LoggerConfig{
 		Next:         nil,
-		Format:       "[${time}] ${status} - ${latency} ${method} ${path} ${query} ${ip} ${user_agent} ${body_size}\n",
+		Format:       "[${time}] ${status} - ${latency} ${method} ${path} ${query} ${ip} ${user_agent} ${res_body_size}\n",
 		TimeFormat:   "2006-01-02 15:04:05",
 		TimeZone:     "Local",
 		TimeInterval: 500 * time.Millisecond,
@@ -89,15 +89,18 @@ func Logger(config ...LoggerConfig) Middleware {
 			}
 
 			attrs := map[string]interface{}{
-				"time":       time.Now().Format(cfg.TimeFormat),
-				"ip":         r.RemoteAddr,
-				"user_agent": r.UserAgent(),
-				"query":      r.URL.RawQuery,
-				"body_size":  r.ContentLength,
-				"status":     ww.statusCode,
-				"latency":    duration,
-				"method":     r.Method,
-				"path":       r.URL.Path,
+				"time":          time.Now().Format(cfg.TimeFormat),
+				"ip":            r.RemoteAddr,
+				"user_agent":    r.UserAgent(),
+				"query":         r.URL.RawQuery,
+				"req_body_size": r.ContentLength,
+				"res_body_size": ww.Size(),
+				"status":        ww.Status(),
+				"latency":       duration,
+				"method":        r.Method,
+				"path":          r.URL.Path,
+				"protocol":      r.Proto,
+				"referer":       r.Referer(),
 			}
 
 			log := cfg.Format
@@ -105,7 +108,7 @@ func Logger(config ...LoggerConfig) Middleware {
 				placeholder := "${" + key + "}"
 				stringValue := fmt.Sprintf("%v", value)
 				if cfg.UseColor && xcolor.IsColorEnabled() {
-					stringValue = colorizeLogValue(key, ww.statusCode, stringValue)
+					stringValue = colorizeLogValue(key, ww.Status(), stringValue)
 				}
 				log = strings.Replace(log, placeholder, stringValue, 1)
 			}
@@ -169,15 +172,26 @@ func Recover(config ...RecoverConfig) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if err := recover(); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+
+					stack := debug.Stack()
 					if cfg.EnableStackTrace {
-						stack := debug.Stack()
 						if cfg.StackTraceHandler != nil {
 							cfg.StackTraceHandler(r, err)
 						} else if cfg.ErrorLogger != nil {
-							cfg.ErrorLogger("Panic recovered", "error", err, "stack", string(stack))
+							cfg.ErrorLogger("Panic recovered",
+								"error", err,
+								"stack", string(stack),
+								"path", r.URL.Path,
+								"method", r.Method,
+								"ip", r.RemoteAddr,
+							)
 						}
 					}
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+					if !cfg.EnableStackTrace {
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -734,11 +748,34 @@ func GetSessionManager(r *http.Request) *SessionManager {
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
+	written    bool
+	size       int64
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
+	if !rw.written {
+		rw.statusCode = code
+		rw.ResponseWriter.WriteHeader(code)
+		rw.written = true
+	}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.written {
+		rw.statusCode = http.StatusOK
+		rw.written = true
+	}
+	n, err := rw.ResponseWriter.Write(b)
+	rw.size += int64(n)
+	return n, err
+}
+
+func (rw *responseWriter) Status() int {
+	return rw.statusCode
+}
+
+func (rw *responseWriter) Size() int64 {
+	return rw.size
 }
 
 // gzipResponseWriter is a wrapper for http.ResponseWriter that allows us to gzip the response

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/seefs001/xox/x"
@@ -52,6 +53,7 @@ type Client struct {
 	responseCallback func(*http.Response) error
 	requestCallback  func(*http.Request) error
 	forceContentType string
+	mu               sync.RWMutex
 }
 
 // RetryConfig contains retry-related configuration
@@ -238,18 +240,24 @@ func (c *Client) SetLogOptions(options LogOptions) {
 
 // SetBaseURL sets the base URL for all requests
 func (c *Client) SetBaseURL(url string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if err := c.validateClient(); err != nil {
-		xlog.Error("Failed to set base URL", "error", err)
+		xlog.Error("Failed to set base URL", "error", err, "url", url)
 		return c
 	}
-	c.baseURL = url
+	c.baseURL = strings.TrimRight(url, "/")
 	return c
 }
 
 // SetHeader sets a header for all requests
 func (c *Client) SetHeader(key, value string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if err := c.validateClient(); err != nil {
-		xlog.Error("Failed to set header", "error", err)
+		xlog.Error("Failed to set header", "error", err, "key", key)
 		return c
 	}
 	c.headers.Set(key, value)
@@ -859,8 +867,27 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	var err error
 
 	if c.retryConfig.Enabled {
+		backoff := time.Millisecond * 100
+
 		err = c.retryWithBackoff(req.Context(), func() error {
-			resp, err = c.client.Do(req)
+			clonedReq := req.Clone(req.Context())
+			if clonedReq.Body != nil {
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					return err
+				}
+				req.Body = io.NopCloser(bytes.NewBuffer(body))
+				clonedReq.Body = io.NopCloser(bytes.NewBuffer(body))
+			}
+
+			resp, err = c.client.Do(clonedReq)
+			if err != nil {
+				time.Sleep(backoff)
+				backoff *= 2
+				if backoff > c.retryConfig.MaxBackoff {
+					backoff = c.retryConfig.MaxBackoff
+				}
+			}
 			return err
 		})
 	} else {
@@ -873,6 +900,12 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 
 	if c.debug && c.logOptions.LogResponse {
 		c.logResponse(resp)
+	}
+
+	if c.responseCallback != nil {
+		if err := c.responseCallback(resp); err != nil {
+			xlog.Error("Response callback failed", "error", err)
+		}
 	}
 
 	return resp, nil
@@ -959,17 +992,23 @@ func (c *Client) logRequest(req *http.Request) {
 		return
 	}
 
+	reqID := xlog.GenReqID()
 	xlog.Debug("HTTP Request",
+		"req_id", reqID,
 		"method", req.Method,
 		"url", req.URL.String(),
 		"proto", req.Proto,
 		"content_length", req.ContentLength,
+		"remote_addr", req.RemoteAddr,
 	)
 
 	if c.logOptions.LogHeaders && req.Header != nil {
 		for key, values := range req.Header {
 			if c.shouldLogHeader(key) {
-				xlog.Debug("Request Header", "key", key, "value", strings.Join(values, ", "))
+				xlog.Debug("Request Header",
+					"req_id", reqID,
+					"key", key,
+					"value", strings.Join(values, ", "))
 			}
 		}
 	}
@@ -977,22 +1016,22 @@ func (c *Client) logRequest(req *http.Request) {
 	if c.logOptions.LogBody && req.Body != nil {
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
-			xlog.Warn("Failed to read request body", "error", err)
+			xlog.Warn("Failed to read request body",
+				"req_id", reqID,
+				"error", err)
 		} else {
-			req.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+			req.Body = io.NopCloser(bytes.NewBuffer(body))
 			if len(body) > c.logOptions.MaxBodyLogSize {
-				xlog.Debug("Request Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+				xlog.Debug("Request Body (truncated)",
+					"req_id", reqID,
+					"body", string(body[:c.logOptions.MaxBodyLogSize]))
 			} else {
-				xlog.Debug("Request Body", "body", string(body))
+				xlog.Debug("Request Body",
+					"req_id", reqID,
+					"body", string(body))
 			}
 		}
 	}
-
-	xlog.Debug("Request Details",
-		"host", req.Host,
-		"remote_addr", req.RemoteAddr,
-		"request_uri", req.RequestURI,
-	)
 }
 
 func (c *Client) logResponse(resp *http.Response) {
@@ -1001,7 +1040,9 @@ func (c *Client) logResponse(resp *http.Response) {
 		return
 	}
 
+	reqID := xlog.GenReqID()
 	xlog.Debug("HTTP Response",
+		"req_id", reqID,
 		"status", resp.Status,
 		"status_code", resp.StatusCode,
 		"proto", resp.Proto,
@@ -1011,7 +1052,10 @@ func (c *Client) logResponse(resp *http.Response) {
 	if c.logOptions.LogHeaders && resp.Header != nil {
 		for key, values := range resp.Header {
 			if c.shouldLogHeader(key) {
-				xlog.Debug("Response Header", "key", key, "value", strings.Join(values, ", "))
+				xlog.Debug("Response Header",
+					"req_id", reqID,
+					"key", key,
+					"value", strings.Join(values, ", "))
 			}
 		}
 	}
@@ -1019,13 +1063,19 @@ func (c *Client) logResponse(resp *http.Response) {
 	if c.logOptions.LogBody && resp.Body != nil {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			xlog.Warn("Failed to read response body", "error", err)
+			xlog.Warn("Failed to read response body",
+				"req_id", reqID,
+				"error", err)
 		} else {
-			resp.Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+			resp.Body = io.NopCloser(bytes.NewBuffer(body))
 			if len(body) > c.logOptions.MaxBodyLogSize {
-				xlog.Debug("Response Body (truncated)", "body", string(body[:c.logOptions.MaxBodyLogSize]))
+				xlog.Debug("Response Body (truncated)",
+					"req_id", reqID,
+					"body", string(body[:c.logOptions.MaxBodyLogSize]))
 			} else {
-				xlog.Debug("Response Body", "body", string(body))
+				xlog.Debug("Response Body",
+					"req_id", reqID,
+					"body", string(body))
 			}
 		}
 	}
@@ -1035,6 +1085,7 @@ func (c *Client) logResponse(resp *http.Response) {
 			if startTime, ok := startTimeValue.(time.Time); ok {
 				duration := time.Since(startTime)
 				xlog.Debug("Response Timing",
+					"req_id", reqID,
 					"duration", duration.String(),
 					"start_time", startTime.Format(time.RFC3339),
 					"end_time", time.Now().Format(time.RFC3339),

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seefs001/xox/xerror"
 	"github.com/seefs001/xox/xhttpc"
 )
 
@@ -362,16 +363,20 @@ func (c *OpenAIClient) CreateTranscription(ctx context.Context, req CreateTransc
 }
 
 func (c *OpenAIClient) sendRequestWithResp(ctx context.Context, method, endpoint string, reqBody, respBody interface{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	url := c.baseURL + endpoint
 
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request body: %w", err)
+		return xerror.Wrap(err, "failed to marshal request body")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(reqJSON))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return xerror.Wrap(err, "failed to create request")
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -379,80 +384,71 @@ func (c *OpenAIClient) sendRequestWithResp(ctx context.Context, method, endpoint
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return xerror.Wrap(err, "failed to send request")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API request failed with status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return xerror.Newf("API request failed with status code %d: %s", resp.StatusCode, string(body))
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(respBody)
-	if err != nil {
-		return fmt.Errorf("failed to decode response body: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(respBody); err != nil {
+		return xerror.Wrap(err, "failed to decode response body")
 	}
 
 	return nil
 }
 
 func (c *OpenAIClient) sendMultipartRequest(ctx context.Context, endpoint string, reqBody, respBody interface{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	url := c.baseURL + endpoint
 
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
+	defer w.Close()
 
 	switch req := reqBody.(type) {
 	case CreateImageEditRequest:
-		addFormField(w, "prompt", req.Prompt)
-		addFormField(w, "n", fmt.Sprintf("%d", req.N))
-		addFormField(w, "size", req.Size)
-		addFormField(w, "response_format", req.ResponseFormat)
-		addFormFile(w, "image", req.Image)
-		if req.Mask != "" {
-			addFormFile(w, "mask", req.Mask)
+		if err := addMultipartFields(w, req); err != nil {
+			return xerror.Wrap(err, "failed to add multipart fields")
 		}
 	case CreateImageVariationRequest:
-		addFormField(w, "n", fmt.Sprintf("%d", req.N))
-		addFormField(w, "size", req.Size)
-		addFormField(w, "response_format", req.ResponseFormat)
-		addFormFile(w, "image", req.Image)
+		if err := addMultipartFields(w, req); err != nil {
+			return xerror.Wrap(err, "failed to add multipart fields")
+		}
 	case CreateTranscriptionRequest:
-		addFormField(w, "model", req.Model)
-		addFormField(w, "language", req.Language)
-		addFormField(w, "prompt", req.Prompt)
-		addFormField(w, "response_format", req.ResponseFormat)
-		addFormField(w, "temperature", fmt.Sprintf("%f", req.Temperature))
-		addFormFile(w, "file", req.File)
+		if err := addMultipartFields(w, req); err != nil {
+			return xerror.Wrap(err, "failed to add multipart fields")
+		}
 	default:
-		return fmt.Errorf("unsupported request type for multipart request")
+		return xerror.New("unsupported request type for multipart request")
 	}
 
-	err := w.Close()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
 	if err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
+		return xerror.Wrap(err, "failed to create request")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &b)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
+	httpReq.Header.Set("Content-Type", w.FormDataContentType())
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return xerror.Wrap(err, "failed to send request")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API request failed with status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return xerror.Newf("API request failed with status code %d: %s", resp.StatusCode, string(body))
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(respBody)
-	if err != nil {
-		return fmt.Errorf("failed to decode response body: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(respBody); err != nil {
+		return xerror.Wrap(err, "failed to decode response body")
 	}
 
 	return nil
@@ -477,25 +473,93 @@ func (c *OpenAIClient) sendRawRequest(ctx context.Context, method, endpoint stri
 	return c.httpClient.Do(req)
 }
 
-func addFormField(w *multipart.Writer, fieldName, value string) {
-	w.WriteField(fieldName, value)
+func addMultipartFields(w *multipart.Writer, req interface{}) error {
+	switch r := req.(type) {
+	case CreateImageEditRequest:
+		if err := addFormFile(w, "image", r.Image); err != nil {
+			return xerror.Wrap(err, "failed to add image file")
+		}
+		if r.Mask != "" {
+			if err := addFormFile(w, "mask", r.Mask); err != nil {
+				return xerror.Wrap(err, "failed to add mask file")
+			}
+		}
+		addFormField(w, "prompt", r.Prompt)
+		if r.N > 0 {
+			addFormField(w, "n", fmt.Sprintf("%d", r.N))
+		}
+		if r.Size != "" {
+			addFormField(w, "size", r.Size)
+		}
+		if r.ResponseFormat != "" {
+			addFormField(w, "response_format", r.ResponseFormat)
+		}
+		if r.User != "" {
+			addFormField(w, "user", r.User)
+		}
+
+	case CreateImageVariationRequest:
+		if err := addFormFile(w, "image", r.Image); err != nil {
+			return xerror.Wrap(err, "failed to add image file")
+		}
+		if r.N > 0 {
+			addFormField(w, "n", fmt.Sprintf("%d", r.N))
+		}
+		if r.Size != "" {
+			addFormField(w, "size", r.Size)
+		}
+		if r.ResponseFormat != "" {
+			addFormField(w, "response_format", r.ResponseFormat)
+		}
+		if r.User != "" {
+			addFormField(w, "user", r.User)
+		}
+
+	case CreateTranscriptionRequest:
+		if err := addFormFile(w, "file", r.File); err != nil {
+			return xerror.Wrap(err, "failed to add audio file")
+		}
+		addFormField(w, "model", r.Model)
+		if r.Language != "" {
+			addFormField(w, "language", r.Language)
+		}
+		if r.Prompt != "" {
+			addFormField(w, "prompt", r.Prompt)
+		}
+		if r.ResponseFormat != "" {
+			addFormField(w, "response_format", r.ResponseFormat)
+		}
+		if r.Temperature != 0 {
+			addFormField(w, "temperature", fmt.Sprintf("%.2f", r.Temperature))
+		}
+
+	default:
+		return xerror.New("unsupported request type")
+	}
+	return nil
+}
+
+func addFormField(w *multipart.Writer, fieldName, value string) error {
+	if err := w.WriteField(fieldName, value); err != nil {
+		return xerror.Wrap(err, "failed to write form field")
+	}
+	return nil
 }
 
 func addFormFile(w *multipart.Writer, fieldName, filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return xerror.Wrap(err, "failed to open file")
 	}
 	defer file.Close()
 
 	part, err := w.CreateFormFile(fieldName, filePath)
 	if err != nil {
-		return fmt.Errorf("failed to create form file: %w", err)
+		return xerror.Wrap(err, "failed to create form file")
 	}
 
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return fmt.Errorf("failed to copy file content: %w", err)
+	if _, err := io.Copy(part, file); err != nil {
+		return xerror.Wrap(err, "failed to copy file content")
 	}
 
 	return nil

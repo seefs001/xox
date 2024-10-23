@@ -24,51 +24,65 @@ func Load(options ...LoadOptions) error {
 		filename = options[0].Filename
 	}
 
-	// Try to find the .env file in the current directory and parent directories
+	envFiles := []string{filename, filename + ".local"}
+	var errs []error
+
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return xerror.Wrap(err, "error getting current directory")
 	}
 
 	for {
-		filePath := filepath.Join(currentDir, filename)
-		if x.FileExists(filePath) {
-			return loadEnvFile(filePath)
+		for _, envFile := range envFiles {
+			filePath := filepath.Join(currentDir, envFile)
+			if x.FileExists(filePath) {
+				if err := loadEnvFile(filePath); err != nil {
+					errs = append(errs, xerror.Wrapf(err, "error loading file: %s", filePath))
+				}
+			}
 		}
 
 		parentDir := filepath.Dir(currentDir)
 		if parentDir == currentDir {
-			break // We've reached the root directory
+			break
 		}
 		currentDir = parentDir
 	}
 
-	return xerror.New(".env file not found")
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
 }
 
 func loadEnvFile(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return xerror.Wrap(err, "error opening .env file")
+		return xerror.Wrap(err, "error opening file")
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	lineNum := 0
+
 	for scanner.Scan() {
+		lineNum++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
+			continue
 		}
 
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			return xerror.Newf("invalid line in .env file: %s", line)
+			continue
 		}
 
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
 
-		// Remove surrounding quotes if present
+		value := strings.TrimSpace(parts[1])
 		value = strings.Trim(value, `"'`)
 
 		if err := os.Setenv(key, value); err != nil {
@@ -77,7 +91,7 @@ func loadEnvFile(filePath string) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return xerror.Wrap(err, "error reading .env file")
+		return xerror.Wrap(err, "error reading file")
 	}
 
 	return nil
@@ -112,14 +126,38 @@ func GetBool(key string) bool {
 	return x.StringToBool(os.Getenv(key))
 }
 
+// GetBoolDefault retrieves the boolean value of an environment variable or returns a default value if not set
+func GetBoolDefault(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return x.StringToBool(value)
+	}
+	return defaultValue
+}
+
 // GetInt retrieves the integer value of an environment variable
 func GetInt(key string) (int, error) {
 	return x.StringToInt(os.Getenv(key))
 }
 
+// GetIntDefault retrieves the integer value of an environment variable or returns a default value if not set
+func GetIntDefault(key string, defaultValue int) int {
+	if value, err := GetInt(key); err == nil {
+		return value
+	}
+	return defaultValue
+}
+
 // GetFloat64 retrieves the float64 value of an environment variable
 func GetFloat64(key string) (float64, error) {
 	return x.StringToFloat64(os.Getenv(key))
+}
+
+// GetFloat64Default retrieves the float64 value of an environment variable or returns a default value if not set
+func GetFloat64Default(key string, defaultValue float64) float64 {
+	if value, err := GetFloat64(key); err == nil {
+		return value
+	}
+	return defaultValue
 }
 
 // GetSlice retrieves a slice of strings from an environment variable
@@ -156,6 +194,14 @@ func GetDuration(key string) (time.Duration, error) {
 	return x.StringToDuration(os.Getenv(key))
 }
 
+// GetDurationDefault retrieves the time.Duration value of an environment variable or returns a default value if not set
+func GetDurationDefault(key string, defaultValue time.Duration) time.Duration {
+	if value, err := GetDuration(key); err == nil {
+		return value
+	}
+	return defaultValue
+}
+
 // GetMap retrieves a map of strings from an environment variable
 func GetMap(key, pairSep, kvSep string) map[string]string {
 	return x.StringToMap(os.Getenv(key), pairSep, kvSep)
@@ -164,4 +210,19 @@ func GetMap(key, pairSep, kvSep string) map[string]string {
 // GetJSON retrieves and unmarshals a JSON-encoded environment variable
 func GetJSON(key string, v interface{}) error {
 	return json.Unmarshal([]byte(os.Getenv(key)), v)
+}
+
+// GetJSONDefault retrieves and unmarshals a JSON-encoded environment variable or returns a default value if not set
+func GetJSONDefault(key string, defaultValue interface{}, v interface{}) error {
+	if value := os.Getenv(key); value != "" {
+		if err := json.Unmarshal([]byte(value), v); err == nil {
+			return nil
+		}
+	}
+
+	defaultJSON, err := json.Marshal(defaultValue)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(defaultJSON, v)
 }

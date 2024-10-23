@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/seefs001/xox/x"
@@ -25,6 +26,7 @@ var (
 	defaultLevel   slog.Level
 	handlers       []slog.Handler
 	mu             sync.RWMutex // Added mutex for thread-safe access
+	reqIDCounter   uint64
 )
 
 // LogConfig represents the configuration for logging.
@@ -184,24 +186,32 @@ func (h *ColorConsoleHandler) SetFormat(format string) {
 
 // Handle handles the log record with color output.
 func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
+	if h.w == nil {
+		return xerror.New("writer is nil")
+	}
+
 	level := r.Level.String()
+	levelColor := xcolor.White
 
 	switch r.Level {
 	case slog.LevelDebug:
-		level = xcolor.Colorize(xcolor.Cyan, level)
+		levelColor = xcolor.Cyan
 	case slog.LevelInfo:
-		level = xcolor.Colorize(xcolor.Green, level)
+		levelColor = xcolor.Green
 	case slog.LevelWarn:
-		level = xcolor.Colorize(xcolor.Yellow, level)
+		levelColor = xcolor.Yellow
 	case slog.LevelError:
-		level = xcolor.Colorize(xcolor.Red, level)
+		levelColor = xcolor.Red
 	}
 
-	// Format output
+	level = xcolor.Colorize(levelColor, level)
+
 	timeStr := r.Time.Format(time.RFC3339)
 	msg := r.Message
+	if h.maxMessageLen > 0 && len(msg) > h.maxMessageLen {
+		msg = msg[:h.maxMessageLen] + "..."
+	}
 
-	// Apply attributes
 	var attrs []string
 	var source string
 	r.Attrs(func(a slog.Attr) bool {
@@ -209,23 +219,29 @@ func (h *ColorConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 			source = a.Value.String()
 		} else {
 			attrStr := fmt.Sprintf("%s=%v", a.Key, a.Value.Any())
+			if h.maxAttrLen > 0 && len(attrStr) > h.maxAttrLen {
+				attrStr = attrStr[:h.maxAttrLen] + "..."
+			}
 			attrs = append(attrs, attrStr)
 		}
 		return true
 	})
+
 	attrStr := ""
 	if len(attrs) > 0 {
 		attrStr = " " + strings.Join(attrs, " ")
 	}
 
-	// Apply groups
 	prefix := strings.Join(h.groups, ".")
 	if prefix != "" {
 		prefix += "."
 	}
 
-	// Format the log message
-	logMsg := fmt.Sprintf("[%s] [%s] [%s] %s%s%s", source, level, timeStr, prefix, msg, attrStr)
+	logMsg := strings.ReplaceAll(h.format, "%s", source)
+	logMsg = strings.ReplaceAll(logMsg, "%l", level)
+	logMsg = strings.ReplaceAll(logMsg, "%t", timeStr)
+	logMsg = strings.ReplaceAll(logMsg, "%m", prefix+msg)
+	logMsg = strings.ReplaceAll(logMsg, "%a", attrStr)
 
 	_, err := fmt.Fprintln(h.w, logMsg)
 	return xerror.Wrap(err, "failed to write log message")
@@ -480,16 +496,27 @@ func (h *RotatingFileHandler) updateFileSize() {
 // rotate rotates the log file.
 func (h *RotatingFileHandler) rotate() error {
 	if h.file != nil {
-		h.buffer.Flush()
-		h.file.Close()
+		if h.buffer != nil {
+			if err := h.buffer.Flush(); err != nil {
+				return xerror.Wrap(err, "failed to flush buffer")
+			}
+		}
+		if err := h.file.Close(); err != nil {
+			return xerror.Wrap(err, "failed to close file")
+		}
 	}
 
 	dir := filepath.Dir(h.config.Filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return xerror.Wrap(err, "failed to create directory")
+	}
+
 	ext := filepath.Ext(h.config.Filename)
 	base := filepath.Base(h.config.Filename)
 	base = strings.TrimSuffix(base, ext)
 
-	filename := fmt.Sprintf("%s.%d%s", base, h.currentNum, ext)
+	timestamp := time.Now().Format("20060102150405")
+	filename := fmt.Sprintf("%s.%s.%d%s", base, timestamp, h.currentNum, ext)
 	fullPath := filepath.Join(dir, filename)
 
 	newFile, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -498,11 +525,13 @@ func (h *RotatingFileHandler) rotate() error {
 	}
 
 	h.file = newFile
+	h.buffer = bufio.NewWriterSize(h.file, 32*1024)
 	h.size = 0
 	h.lastRotate = time.Now()
 	h.currentNum++
+	h.writeCount = 0
 
-	h.removeOldFiles()
+	go h.removeOldFiles()
 
 	return nil
 }
@@ -536,18 +565,30 @@ func (h *RotatingFileHandler) Close() error {
 
 	close(h.done)
 	h.flushTicker.Stop()
-	h.closed = true
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	var errs []error
 	if h.buffer != nil {
 		if err := h.buffer.Flush(); err != nil {
-			return xerror.Wrap(err, "failed to flush buffer")
+			errs = append(errs, xerror.Wrap(err, "failed to flush buffer"))
 		}
 	}
+
 	if h.file != nil {
-		return h.file.Close()
+		if err := h.file.Sync(); err != nil {
+			errs = append(errs, xerror.Wrap(err, "failed to sync file"))
+		}
+		if err := h.file.Close(); err != nil {
+			errs = append(errs, xerror.Wrap(err, "failed to close file"))
+		}
+	}
+
+	h.closed = true
+
+	if len(errs) > 0 {
+		return xerror.Errorf("multiple errors during close: %v", errs)
 	}
 	return nil
 }
@@ -818,4 +859,10 @@ func logContext(ctx context.Context, level slog.Level, msg string, args ...any) 
 		}
 	}
 	defaultLogger.LogAttrs(ctx, level, msg, slog.Any("args", args))
+}
+
+// GenReqID generates a unique request ID
+func GenReqID() string {
+	id := atomic.AddUint64(&reqIDCounter, 1)
+	return fmt.Sprintf("req-%d-%d", time.Now().UnixNano(), id)
 }

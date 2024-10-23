@@ -17,6 +17,10 @@ func ToString(value any) (string, error) {
 	}
 
 	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return "", nil
+	}
+
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return "", nil
@@ -88,6 +92,10 @@ func toInt64(value any) (int64, error) {
 	}
 
 	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return 0, nil
+	}
+
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return 0, nil
@@ -148,6 +156,10 @@ func ToFloat64(value any) (float64, error) {
 	}
 
 	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return 0.0, nil
+	}
+
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return 0.0, nil
@@ -255,6 +267,10 @@ func ToMap(value any) (map[string]any, error) {
 	}
 
 	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return nil, nil
+	}
+
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return nil, nil
@@ -264,7 +280,7 @@ func ToMap(value any) (map[string]any, error) {
 
 	switch v.Kind() {
 	case reflect.Map:
-		result := make(map[string]any)
+		result := make(map[string]any, v.Len())
 		for _, key := range v.MapKeys() {
 			strKey, err := ToString(key.Interface())
 			if err != nil {
@@ -332,10 +348,22 @@ func ToSlice(value any) ([]any, error) {
 
 // ConvertStruct converts one struct to another, matching fields by name (case-insensitive).
 func ConvertStruct(src any, dst any) error {
+	if src == nil || dst == nil {
+		return xerror.New("src and dst cannot be nil")
+	}
+
 	srcVal := reflect.ValueOf(src)
-	dstVal := reflect.ValueOf(dst).Elem()
+	dstVal := reflect.ValueOf(dst)
+
+	if !dstVal.IsValid() || dstVal.Kind() != reflect.Ptr || dstVal.IsNil() {
+		return xerror.New("dst must be a non-nil pointer to struct")
+	}
+	dstVal = dstVal.Elem()
 
 	if srcVal.Kind() == reflect.Ptr {
+		if srcVal.IsNil() {
+			return xerror.New("src cannot be nil pointer")
+		}
 		srcVal = srcVal.Elem()
 	}
 
@@ -414,4 +442,36 @@ func StructToString[T any](v T) (string, error) {
 		return "", xerror.Wrap(err, "failed to convert struct to string")
 	}
 	return string(bytes), nil
+}
+
+func MustToString(value any) string {
+	str, err := ToString(value)
+	if err != nil {
+		return ""
+	}
+	return str
+}
+
+func MustToInt64(value any) int64 {
+	i, err := ToInt64(value)
+	if err != nil {
+		return 0
+	}
+	return i
+}
+
+func MustToFloat64(value any) float64 {
+	f, err := ToFloat64(value)
+	if err != nil {
+		return 0.0
+	}
+	return f
+}
+
+func MustToBool(value any) bool {
+	b, err := ToBool(value)
+	if err != nil {
+		return false
+	}
+	return b
 }

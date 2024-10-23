@@ -21,43 +21,59 @@ type Error struct {
 
 // Error returns the error message
 func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Error occurred at: %s\n", e.Timestamp.Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("Error message: %s\n", e.Err.Error()))
+	if e.Err != nil {
+		sb.WriteString(fmt.Sprintf("Error message: %s\n", e.Err.Error()))
+	}
 	sb.WriteString(fmt.Sprintf("Error code: %d\n", e.Code))
-	if len(e.Context) > 0 {
+	if e.Context != nil && len(e.Context) > 0 {
 		sb.WriteString("Context:\n")
 		for key, value := range e.Context {
 			sb.WriteString(fmt.Sprintf("  %s: %v\n", key, value))
 		}
 	}
-	sb.WriteString("Stack trace:\n")
-	sb.WriteString(e.Stack)
+	if e.Stack != "" {
+		sb.WriteString("Stack trace:\n")
+		sb.WriteString(e.Stack)
+	}
 	return sb.String()
 }
 
 // ToJSON converts the error to a JSON string
 // Usage: jsonStr, err := xerror.ToJSON(err)
 func (e *Error) ToJSON() (string, error) {
+	if e == nil {
+		return "", nil
+	}
+
 	type jsonError struct {
 		Message   string                 `json:"message"`
 		Code      int                    `json:"code"`
 		Timestamp string                 `json:"timestamp"`
 		Stack     string                 `json:"stack"`
-		Context   map[string]interface{} `json:"context"`
+		Context   map[string]interface{} `json:"context,omitempty"`
 	}
 
 	jErr := jsonError{
-		Message:   e.Err.Error(),
 		Code:      e.Code,
 		Timestamp: e.Timestamp.Format(time.RFC3339),
 		Stack:     e.Stack,
-		Context:   e.Context,
+	}
+
+	if e.Err != nil {
+		jErr.Message = e.Err.Error()
+	}
+	if e.Context != nil {
+		jErr.Context = e.Context
 	}
 
 	jsonBytes, err := json.Marshal(jErr)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal error: %w", err)
 	}
 	return string(jsonBytes), nil
 }
@@ -243,10 +259,21 @@ func GetErrorCode(err error) ErrorCode {
 // WithContext adds context to an existing error
 // Usage: err = xerror.WithContext(err, "user_id", userId)
 func WithContext(err error, key string, value interface{}) *Error {
+	if err == nil {
+		return nil
+	}
+	if key == "" {
+		return Wrap(err, "empty context key")
+	}
+
 	if xerr, ok := err.(*Error); ok {
+		if xerr.Context == nil {
+			xerr.Context = make(map[string]interface{})
+		}
 		xerr.Context[key] = value
 		return xerr
 	}
+
 	return &Error{
 		Err:       err,
 		Stack:     getStack(),
@@ -449,18 +476,53 @@ func CombineErrors(errs ...error) error {
 // WithFields adds multiple context fields to an error
 // Usage: err = xerror.WithFields(err, map[string]interface{}{"user_id": 123, "action": "login"})
 func WithFields(err error, fields map[string]interface{}) *Error {
-	if xerr, ok := err.(*Error); ok {
-		for k, v := range fields {
+	if err == nil {
+		return nil
+	}
+	if fields == nil {
+		return Wrap(err, "nil fields map")
+	}
+
+	xerr, ok := err.(*Error)
+	if !ok {
+		xerr = &Error{
+			Err:       err,
+			Stack:     getStack(),
+			Timestamp: time.Now(),
+			Code:      int(GetErrorCode(err)),
+			Context:   make(map[string]interface{}),
+		}
+	}
+
+	if xerr.Context == nil {
+		xerr.Context = make(map[string]interface{})
+	}
+
+	for k, v := range fields {
+		if k != "" {
 			xerr.Context[k] = v
 		}
-		return xerr
-	}
-	xerr := &Error{
-		Err:       err,
-		Stack:     getStack(),
-		Timestamp: time.Now(),
-		Code:      int(GetErrorCode(err)),
-		Context:   fields,
 	}
 	return xerr
+}
+
+func GetContext(err error) map[string]interface{} {
+	if xerr, ok := err.(*Error); ok && xerr != nil {
+		return xerr.Context
+	}
+	return nil
+}
+
+func GetCode(err error) int {
+	if xerr, ok := err.(*Error); ok && xerr != nil {
+		return xerr.Code
+	}
+	return int(CodeUnknown)
+}
+
+func GetStack(err error) string {
+	if xerr, ok := err.(*Error); ok && xerr != nil {
+		return xerr.Stack
+	}
+	return ""
 }

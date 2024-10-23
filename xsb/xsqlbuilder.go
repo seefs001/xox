@@ -1,6 +1,7 @@
 package xsb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"reflect"
@@ -69,24 +70,29 @@ type Builder struct {
 	upsertValues         []UpdateClause
 	onDuplicateKeyUpdate []UpdateClause
 	explain              bool
+	ctx                  context.Context
+	err                  error
+	logSQL               bool
+	allowEmptyWhere      bool
 }
 
 // New creates a new Builder instance with PostgreSQL as default dialect
 func New() *Builder {
 	return &Builder{
 		dialect:              PostgreSQL,
-		columns:              []string{},
-		values:               []interface{}{},
-		whereArgs:            []interface{}{},
-		havingArgs:           []interface{}{},
-		updateClauses:        []UpdateClause{},
-		upsertValues:         []UpdateClause{},
-		onDuplicateKeyUpdate: []UpdateClause{},
-		joins:                []string{},
-		ctes:                 []CTE{},
-		unions:               []*Builder{},
-		upsertColumns:        []string{},
-		returning:            []string{},
+		columns:              make([]string, 0),
+		values:               make([]interface{}, 0),
+		whereArgs:            make([]interface{}, 0),
+		havingArgs:           make([]interface{}, 0),
+		updateClauses:        make([]UpdateClause, 0),
+		upsertValues:         make([]UpdateClause, 0),
+		onDuplicateKeyUpdate: make([]UpdateClause, 0),
+		joins:                make([]string, 0),
+		ctes:                 make([]CTE, 0),
+		unions:               make([]*Builder, 0),
+		upsertColumns:        make([]string, 0),
+		returning:            make([]string, 0),
+		ctx:                  context.Background(),
 	}
 }
 
@@ -585,9 +591,15 @@ func (b *Builder) SQL() string {
 
 // Build returns the final query string and arguments
 func (b *Builder) Build() (string, []interface{}) {
-	if b.table == "" {
+	if b.err != nil {
 		return "", nil
 	}
+
+	if b.table == "" {
+		b.err = fmt.Errorf("table name is required")
+		return "", nil
+	}
+
 	switch {
 	case len(b.columns) > 0:
 		return b.BuildSelect()
@@ -646,6 +658,10 @@ func (b *Builder) Clone() *Builder {
 		upsertValues:         make([]UpdateClause, len(b.upsertValues)),
 		onDuplicateKeyUpdate: make([]UpdateClause, len(b.onDuplicateKeyUpdate)),
 		explain:              b.explain,
+		ctx:                  b.ctx,
+		err:                  b.err,
+		logSQL:               b.logSQL,
+		allowEmptyWhere:      b.allowEmptyWhere,
 	}
 	copy(newBuilder.columns, b.columns)
 	copy(newBuilder.values, b.values)
@@ -694,38 +710,49 @@ func (b *Builder) FromStruct(s interface{}) *Builder {
 
 // Exec executes the query and returns the result
 func (b *Builder) Exec(db *sql.DB) (sql.Result, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+
 	query, args := b.Build()
-	if b.debug {
-		xlog.Debugf("Executing query: %s with args: %v", query, args)
+	if b.logSQL {
+		xlog.Debugf("[SQL] %s %v", query, args)
 	}
+
 	if b.tx != nil {
-		return b.tx.Exec(query, args...)
+		return b.tx.ExecContext(b.ctx, query, args...)
 	}
-	return db.Exec(query, args...)
+	return db.ExecContext(b.ctx, query, args...)
 }
 
 // QueryRow executes the query and returns a single row
 func (b *Builder) QueryRow(db *sql.DB) *sql.Row {
 	query, args := b.Build()
-	if b.debug {
-		xlog.Debugf("Executing query: %s with args: %v", query, args)
+	if b.logSQL {
+		xlog.Debugf("[SQL] %s %v", query, args)
 	}
+
 	if b.tx != nil {
-		return b.tx.QueryRow(query, args...)
+		return b.tx.QueryRowContext(b.ctx, query, args...)
 	}
-	return db.QueryRow(query, args...)
+	return db.QueryRowContext(b.ctx, query, args...)
 }
 
 // Query executes the query and returns multiple rows
 func (b *Builder) Query(db *sql.DB) (*sql.Rows, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+
 	query, args := b.Build()
-	if b.debug {
-		xlog.Debugf("Executing query: %s with args: %v", query, args)
+	if b.logSQL {
+		xlog.Debugf("[SQL] %s %v", query, args)
 	}
+
 	if b.tx != nil {
-		return b.tx.Query(query, args...)
+		return b.tx.QueryContext(b.ctx, query, args...)
 	}
-	return db.Query(query, args...)
+	return db.QueryContext(b.ctx, query, args...)
 }
 
 // WithTransaction wraps the builder with a transaction
@@ -1035,4 +1062,66 @@ func Sanitize(input string) string {
 	sanitized = strings.TrimSpace(sanitized)
 
 	return sanitized
+}
+
+func (b *Builder) WithContext(ctx context.Context) *Builder {
+	b.ctx = ctx
+	return b
+}
+
+func (b *Builder) Error() error {
+	return b.err
+}
+
+func (b *Builder) AllowEmptyWhere() *Builder {
+	b.allowEmptyWhere = true
+	return b
+}
+
+func (b *Builder) LogSQL() *Builder {
+	b.logSQL = true
+	return b
+}
+
+func (b *Builder) WhereMap(m map[string]interface{}) *Builder {
+	for k, v := range m {
+		b.Where(fmt.Sprintf("%s = %s", k, b.placeholder()), v)
+	}
+	return b
+}
+
+func (b *Builder) SetMap(m map[string]interface{}) *Builder {
+	for k, v := range m {
+		b.Set(k, v)
+	}
+	return b
+}
+
+func (b *Builder) InsertMap(m map[string]interface{}) *Builder {
+	for k, v := range m {
+		b.columns = append(b.columns, k)
+		b.values = append(b.values, v)
+	}
+	return b
+}
+
+func (b *Builder) First(db *sql.DB) (*sql.Row, error) {
+	b.Limit(1)
+	query, args := b.BuildSelect()
+	if b.logSQL {
+		xlog.Debugf("[SQL] %s %v", query, args)
+	}
+
+	if b.tx != nil {
+		return b.tx.QueryRowContext(b.ctx, query, args...), nil
+	}
+	return db.QueryRowContext(b.ctx, query, args...), nil
+}
+
+func (b *Builder) MustExec(db *sql.DB) sql.Result {
+	result, err := b.Exec(db)
+	if err != nil {
+		panic(err)
+	}
+	return result
 }

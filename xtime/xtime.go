@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/seefs001/xox/xerror"
 )
 
 // Common durations
@@ -29,7 +31,7 @@ func IsLeapYear(year int) bool {
 
 // DaysInMonth returns the number of days in the given month and year
 func DaysInMonth(year, month int) int {
-	if month < 1 || month > 12 {
+	if month < 1 || month > 12 || year < 1 {
 		return 0
 	}
 	if month == 2 {
@@ -46,17 +48,29 @@ func DaysInMonth(year, month int) int {
 
 // StartOfDay returns the start of the day for the given time
 func StartOfDay(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
 // EndOfDay returns the end of the day for the given time
 func EndOfDay(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
 	return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
 }
 
 // StartOfWeek returns the start of the week for the given time
 // The week is considered to start on Sunday by default
 func StartOfWeek(t time.Time, startDay time.Weekday) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	if startDay < time.Sunday || startDay > time.Saturday {
+		startDay = time.Sunday
+	}
 	weekday := t.Weekday()
 	if weekday == startDay {
 		return StartOfDay(t)
@@ -68,6 +82,12 @@ func StartOfWeek(t time.Time, startDay time.Weekday) time.Time {
 // EndOfWeek returns the end of the week for the given time
 // The week is considered to end on Saturday by default
 func EndOfWeek(t time.Time, endDay time.Weekday) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	if endDay < time.Sunday || endDay > time.Saturday {
+		endDay = time.Saturday
+	}
 	weekday := t.Weekday()
 	if weekday == endDay {
 		return EndOfDay(t)
@@ -152,8 +172,13 @@ func pluralS(count time.Duration) string {
 // ParseDuration parses a duration string and returns the time.Duration
 // It supports years (y), months (M), weeks (w), days (d), hours (h), minutes (m), and seconds (s)
 func ParseDuration(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, xerror.New("empty duration string")
+	}
+
 	var d time.Duration
 	var err error
+	s = strings.TrimSpace(s)
 
 	for s != "" {
 		var v int64
@@ -220,19 +245,26 @@ func AddDate(t time.Time, years, months, days int) time.Time {
 
 // DaysBetween calculates the number of days between two dates
 func DaysBetween(a, b time.Time) int {
+	if a.IsZero() || b.IsZero() {
+		return 0
+	}
+	if a.Location() != b.Location() {
+		b = b.In(a.Location())
+	}
 	if a.After(b) {
 		a, b = b, a
 	}
-	days := 0
-	for a.Before(b) {
-		a = a.AddDate(0, 0, 1)
-		days++
-	}
-	return days
+	return int(b.Sub(a).Hours() / 24)
 }
 
 // IsSameDay checks if two times are on the same day
 func IsSameDay(a, b time.Time) bool {
+	if a.IsZero() || b.IsZero() {
+		return false
+	}
+	if a.Location() != b.Location() {
+		b = b.In(a.Location())
+	}
 	y1, m1, d1 := a.Date()
 	y2, m2, d2 := b.Date()
 	return y1 == y2 && m1 == m2 && d1 == d2

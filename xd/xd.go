@@ -56,6 +56,9 @@ func Provide[T any](c *Container, provider func(c *Container) (T, error)) {
 
 // ProvideNamed registers a named service provider for type T in the container.
 func ProvideNamed[T any](c *Container, name string, provider func(c *Container) (T, error)) {
+	if c == nil {
+		return
+	}
 	serviceName := generateServiceName[T]()
 	if name != "" {
 		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
@@ -70,6 +73,13 @@ func ProvideNamed[T any](c *Container, name string, provider func(c *Container) 
 		return
 	}
 	c.mu.Unlock()
+
+	if provider == nil {
+		if c.logf != nil {
+			c.logf("Provider function is nil for service %s", serviceName)
+		}
+		return
+	}
 
 	service, err := provider(c)
 	if err != nil {
@@ -95,6 +105,11 @@ func Invoke[T any](c *Container) (T, error) {
 
 // InvokeNamed retrieves a named service of type T from the container.
 func InvokeNamed[T any](c *Container, name string) (T, error) {
+	var zero T
+	if c == nil {
+		return zero, xerror.New("container is nil")
+	}
+
 	serviceName := generateServiceName[T]()
 	if name != "" {
 		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
@@ -105,8 +120,11 @@ func InvokeNamed[T any](c *Container, name string) (T, error) {
 	c.mu.RUnlock()
 
 	if !exists {
-		var zero T
 		return zero, xerror.Errorf("service %s not found", serviceName)
+	}
+
+	if service == nil {
+		return zero, xerror.Errorf("service %s is nil", serviceName)
 	}
 
 	c.mu.Lock()
@@ -120,10 +138,11 @@ func InvokeNamed[T any](c *Container, name string) (T, error) {
 		c.mu.Unlock()
 	}
 
-	if reflect.TypeOf(service) != reflect.TypeOf((*T)(nil)).Elem() {
-		if c.logf != nil {
-			c.logf("Warning: Service %s type mismatch. Expected %T, got %T", serviceName, *new(T), service)
-		}
+	serviceValue := reflect.ValueOf(service)
+	expectedType := reflect.TypeOf((*T)(nil)).Elem()
+	if !serviceValue.Type().AssignableTo(expectedType) {
+		return zero, xerror.Errorf("service %s type mismatch: expected %v, got %v",
+			serviceName, expectedType, serviceValue.Type())
 	}
 
 	return service.(T), nil
@@ -314,16 +333,21 @@ func (c *Container) SetService(service any) {
 
 // SetNamedService directly sets a named service in the container without using a provider function.
 func (c *Container) SetNamedService(name string, service any) {
+	if c == nil || service == nil {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	serviceName := reflect.TypeOf(service).String()
+	serviceType := reflect.TypeOf(service)
+	serviceName := serviceType.String()
 	if name != "" {
 		serviceName = fmt.Sprintf("%s:%s", serviceName, name)
 	}
 	c.services[serviceName] = service
 	if c.logf != nil {
-		c.logf("Service %s set directly", serviceName)
+		c.logf("Service %s of type %v set directly", serviceName, serviceType)
 	}
 }
 
@@ -342,4 +366,40 @@ func (c *Container) RemoveNamedService(serviceType reflect.Type, name string) {
 	if c.logf != nil {
 		c.logf("Named service %s removed", serviceName)
 	}
+}
+
+// New utility methods
+func (c *Container) GetServiceNames() []string {
+	if c == nil {
+		return nil
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	names := make([]string, 0, len(c.services))
+	for name := range c.services {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (c *Container) ServiceCount() int {
+	if c == nil {
+		return 0
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.services)
+}
+
+func (c *Container) IsServiceInvoked(serviceName string) bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.invokedServices[serviceName]
 }

@@ -20,9 +20,10 @@ type Schedule interface {
 type Cron struct {
 	jobs         []*jobEntry
 	running      bool
-	mutex        sync.Mutex
+	mutex        sync.RWMutex
 	location     *time.Location
 	tickInterval time.Duration
+	errorHandler func(error)
 }
 
 // jobEntry represents a scheduled job
@@ -36,18 +37,23 @@ type jobEntry struct {
 // New creates a new Cron instance with default tick interval of 1 second
 func New() *Cron {
 	return &Cron{
-		jobs:         make([]*jobEntry, 0),
+		jobs:         make([]*jobEntry, 0, 10),
 		location:     time.Local,
 		tickInterval: time.Second,
+		errorHandler: func(err error) {},
 	}
 }
 
 // NewWithTickInterval creates a new Cron instance with a custom tick interval
 func NewWithTickInterval(interval time.Duration) *Cron {
+	if interval < time.Millisecond {
+		interval = time.Second
+	}
 	return &Cron{
-		jobs:         make([]*jobEntry, 0),
+		jobs:         make([]*jobEntry, 0, 10),
 		location:     time.Local,
 		tickInterval: interval,
+		errorHandler: func(err error) {},
 	}
 }
 
@@ -105,49 +111,51 @@ func (c *Cron) Start() {
 
 // run executes the main scheduling loop
 func (c *Cron) run() {
+	ticker := time.NewTicker(c.tickInterval)
+	defer ticker.Stop()
+
 	for {
-		c.mutex.Lock()
+		c.mutex.RLock()
 		if !c.running {
-			c.mutex.Unlock()
-			break
+			c.mutex.RUnlock()
+			return
 		}
 
 		now := time.Now().In(c.location)
-		var duration time.Duration
-
 		if len(c.jobs) == 0 {
-			c.mutex.Unlock()
-			time.Sleep(c.tickInterval)
+			c.mutex.RUnlock()
+			<-ticker.C
 			continue
 		}
 
-		// Find the next job to run
 		earliestTime := time.Time{}
 		for _, job := range c.jobs {
 			if earliestTime.IsZero() || job.next.Before(earliestTime) {
 				earliestTime = job.next
 			}
 		}
+		c.mutex.RUnlock()
 
-		if earliestTime.After(now) {
-			duration = earliestTime.Sub(now)
-		} else {
-			duration = 0
-		}
-
-		c.mutex.Unlock()
-
-		if duration > 0 {
-			time.Sleep(duration)
-		} else {
-			// Run due jobs
+		select {
+		case <-ticker.C:
 			c.mutex.Lock()
 			now = time.Now().In(c.location)
 			for _, job := range c.jobs {
+				if job.next.IsZero() {
+					continue
+				}
 				if !job.next.After(now) {
-					go job.job()
-					// Update next execution time based on the current job's schedule
-					job.next = job.schedule.Next(job.next)
+					go func(j *jobEntry) {
+						defer func() {
+							if r := recover(); r != nil {
+								if c.errorHandler != nil {
+									c.errorHandler(fmt.Errorf("job panic: %v", r))
+								}
+							}
+						}()
+						j.job()
+					}(job)
+					job.next = job.schedule.Next(now)
 				}
 			}
 			c.mutex.Unlock()
@@ -373,4 +381,53 @@ func (c *Cron) AddEveryNSeconds(n int, cmd func()) (string, error) {
 	}
 	spec := fmt.Sprintf("*/%d * * * * *", n)
 	return c.AddFunc(spec, cmd)
+}
+
+// AddEveryNMinutes adds a job to be executed every N minutes
+func (c *Cron) AddEveryNMinutes(n int, cmd func()) (string, error) {
+	if n <= 0 || n > 59 {
+		return "", fmt.Errorf("invalid interval: %d", n)
+	}
+	spec := fmt.Sprintf("0 */%d * * * *", n)
+	return c.AddFunc(spec, cmd)
+}
+
+// AddEveryNHours adds a job to be executed every N hours
+func (c *Cron) AddEveryNHours(n int, cmd func()) (string, error) {
+	if n <= 0 || n > 23 {
+		return "", fmt.Errorf("invalid interval: %d", n)
+	}
+	spec := fmt.Sprintf("0 0 */%d * * *", n)
+	return c.AddFunc(spec, cmd)
+}
+
+// GetJobCount returns the number of jobs in the cron scheduler
+func (c *Cron) GetJobCount() int {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return len(c.jobs)
+}
+
+// Clear removes all jobs from the cron scheduler
+func (c *Cron) Clear() {
+	c.mutex.Lock()
+	c.jobs = make([]*jobEntry, 0, 10)
+	c.mutex.Unlock()
+}
+
+// SetErrorHandler sets the error handler for the cron scheduler
+func (c *Cron) SetErrorHandler(eh func(error)) {
+	c.mutex.Lock()
+	c.errorHandler = eh
+	c.mutex.Unlock()
+}
+
+// SetLocation sets the location for the cron scheduler
+func (c *Cron) SetLocation(loc *time.Location) {
+	if loc == nil {
+		loc = time.Local
+	}
+	c.mutex.Lock()
+	c.location = loc
+	c.mutex.Unlock()
 }

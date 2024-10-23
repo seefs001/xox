@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -38,22 +39,22 @@ func (w *ResponseWriter) Status() int {
 
 // WriteJSON writes JSON response
 func (w *ResponseWriter) WriteJSON(v interface{}) error {
-	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(v)
-	if err != nil {
-		return xerror.Wrap(err, "error encoding JSON response")
+	if v == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return nil
 	}
-	return nil
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(v)
 }
 
 // WriteXML writes XML response
 func (w *ResponseWriter) WriteXML(v interface{}) error {
-	w.Header().Set("Content-Type", "application/xml")
-	err := xml.NewEncoder(w).Encode(v)
-	if err != nil {
-		return xerror.Wrap(err, "error encoding XML response")
+	if v == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return nil
 	}
-	return nil
+	w.Header().Set("Content-Type", "application/xml")
+	return xml.NewEncoder(w).Encode(v)
 }
 
 // Context is a custom context type that includes request and response writer
@@ -146,8 +147,11 @@ func (c *Context) GetBody(v interface{}) error {
 
 // GetBodyRaw returns the raw request body as a byte slice
 func (c *Context) GetBodyRaw() ([]byte, error) {
-	body, err := io.ReadAll(c.Request.Body)
-	return body, xerror.Wrap(err, "error reading raw request body")
+	if c.Request.Body == nil {
+		return nil, nil
+	}
+	defer c.Request.Body.Close()
+	return io.ReadAll(c.Request.Body)
 }
 
 // GetBodyXML decodes the request body as XML into the provided interface
@@ -162,8 +166,10 @@ func (c *Context) GetFormValue(key string) string {
 
 // GetFormFile retrieves a file from a multipart form
 func (c *Context) GetFormFile(key string) (multipart.File, *multipart.FileHeader, error) {
-	file, header, err := c.Request.FormFile(key)
-	return file, header, xerror.Wrap(err, "error getting form file")
+	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+		return nil, nil, xerror.Wrap(err, "failed to parse multipart form")
+	}
+	return c.Request.FormFile(key)
 }
 
 // ParseMultipartForm parses a multipart form
@@ -407,14 +413,18 @@ func (c *Context) IsAjax() bool {
 
 // ClientIP returns the client's IP address
 func (c *Context) ClientIP() string {
-	ip := c.Request.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip = c.Request.Header.Get("X-Real-IP")
+	// Add X-Original-Forwarded-For check
+	for _, h := range []string{"X-Original-Forwarded-For", "X-Forwarded-For", "X-Real-Ip"} {
+		if ip := c.Request.Header.Get(h); ip != "" {
+			return strings.Split(ip, ",")[0]
+		}
 	}
-	if ip == "" {
-		ip = c.Request.RemoteAddr
+
+	if ip, _, err := net.SplitHostPort(c.Request.RemoteAddr); err == nil {
+		return ip
 	}
-	return strings.Split(ip, ":")[0]
+
+	return c.Request.RemoteAddr
 }
 
 // MustBind binds data to a struct and panics if there's an error
@@ -432,4 +442,30 @@ func NewRouterWithMiddleware(middlewares ...func(http.Handler) http.Handler) *ht
 		handler = middlewares[i](handler)
 	}
 	return mux
+}
+
+// New utility methods
+func (c *Context) GetBodyString() (string, error) {
+	data, err := c.GetBodyRaw()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (c *Context) AbortWithError(code int, err error) {
+	c.Writer.WriteHeader(code)
+	c.Writer.WriteJSON(map[string]string{"error": err.Error()})
+}
+
+func (c *Context) GetRequestID() string {
+	return c.GetHeader("X-Request-ID")
+}
+
+func (c *Context) IsWebsocket() bool {
+	if strings.Contains(strings.ToLower(c.GetHeader("Connection")), "upgrade") &&
+		strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
+		return true
+	}
+	return false
 }

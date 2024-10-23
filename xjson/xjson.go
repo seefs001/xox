@@ -19,14 +19,26 @@ type JSONArray []interface{}
 
 // Get retrieves a value from a JSON object using a JSON path
 func Get(data JSONObject, path JSONPath) (interface{}, error) {
-	return getPath(data, string(path))
+	value, err := getPath(data, string(path))
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert json.Number to float64 for consistency
+	if num, ok := value.(json.Number); ok {
+		return num.Float64()
+	}
+	return value, nil
 }
 
 // GetFromString retrieves a value from a JSON string using a JSON path
 func GetFromString(jsonStr string, path JSONPath) (interface{}, error) {
+	if jsonStr == "" {
+		return nil, fmt.Errorf("empty JSON string")
+	}
 	data, err := ParseJSON(jsonStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse JSON error: %w", err)
 	}
 	return Get(data, path)
 }
@@ -134,6 +146,13 @@ func Map(data interface{}, fn func(key interface{}, value interface{}) (interfac
 	case JSONObject:
 		result := make(JSONObject)
 		for key, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			mappedValue, err := fn(key, value)
 			if err != nil {
 				return nil, err
@@ -144,6 +163,13 @@ func Map(data interface{}, fn func(key interface{}, value interface{}) (interfac
 	case JSONArray:
 		result := make(JSONArray, len(v))
 		for i, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			mappedValue, err := fn(i, value)
 			if err != nil {
 				return nil, err
@@ -154,6 +180,13 @@ func Map(data interface{}, fn func(key interface{}, value interface{}) (interfac
 	case []interface{}:
 		result := make([]interface{}, len(v))
 		for i, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			mappedValue, err := fn(i, value)
 			if err != nil {
 				return nil, err
@@ -172,6 +205,13 @@ func Filter(data interface{}, fn func(key interface{}, value interface{}) (bool,
 	case JSONObject:
 		result := make(JSONObject)
 		for key, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			include, err := fn(key, value)
 			if err != nil {
 				return nil, err
@@ -184,6 +224,13 @@ func Filter(data interface{}, fn func(key interface{}, value interface{}) (bool,
 	case JSONArray:
 		result := make(JSONArray, 0)
 		for i, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			include, err := fn(i, value)
 			if err != nil {
 				return nil, err
@@ -196,6 +243,13 @@ func Filter(data interface{}, fn func(key interface{}, value interface{}) (bool,
 	case []interface{}:
 		result := make([]interface{}, 0)
 		for i, value := range v {
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
 			include, err := fn(i, value)
 			if err != nil {
 				return nil, err
@@ -210,34 +264,55 @@ func Filter(data interface{}, fn func(key interface{}, value interface{}) (bool,
 	}
 }
 
-// Reduce applies a function against an accumulator and each element in the array or object to reduce it to a single value
-func Reduce(data interface{}, fn func(accumulator, key, value interface{}) (interface{}, error), initialValue interface{}) (interface{}, error) {
-	accumulator := initialValue
+// Reduce applies a function against an accumulator and each element in the array/object
+func Reduce(data interface{}, fn func(accumulator, key, value interface{}) (interface{}, error), initial interface{}) (interface{}, error) {
+	accumulator := initial
 
 	switch v := data.(type) {
 	case JSONObject:
 		for key, value := range v {
-			var err error
-			accumulator, err = fn(accumulator, key, value)
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
+			result, err := fn(accumulator, key, value)
 			if err != nil {
 				return nil, err
 			}
+			accumulator = result
 		}
 	case JSONArray:
 		for i, value := range v {
-			var err error
-			accumulator, err = fn(accumulator, i, value)
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
+			result, err := fn(accumulator, i, value)
 			if err != nil {
 				return nil, err
 			}
+			accumulator = result
 		}
 	case []interface{}:
 		for i, value := range v {
-			var err error
-			accumulator, err = fn(accumulator, i, value)
+			if num, ok := value.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				value = f
+			}
+			result, err := fn(accumulator, i, value)
 			if err != nil {
 				return nil, err
 			}
+			accumulator = result
 		}
 	default:
 		return nil, fmt.Errorf("Reduce can only be applied to JSONObject, JSONArray, or []interface{}")
@@ -248,60 +323,90 @@ func Reduce(data interface{}, fn func(accumulator, key, value interface{}) (inte
 
 // getPath is a helper function to traverse the JSON object using the path
 func getPath(data interface{}, path string) (interface{}, error) {
+	if data == nil {
+		return nil, fmt.Errorf("nil data input")
+	}
+	if path == "" {
+		return data, nil
+	}
+
 	parts := strings.Split(path, ".")
 	current := data
 
 	for _, part := range parts {
+		if current == nil {
+			return nil, fmt.Errorf("null value at path segment: %s", part)
+		}
+
 		if strings.HasSuffix(part, "]") {
-			// Handle array access
-			arrayParts := strings.Split(part[:len(part)-1], "[")
+			arrayParts := strings.Split(strings.TrimSpace(part[:len(part)-1]), "[")
 			if len(arrayParts) != 2 {
 				return nil, fmt.Errorf("invalid array access syntax: %s", part)
 			}
 
-			key := arrayParts[0]
-			index, err := strconv.Atoi(arrayParts[1])
+			key := strings.TrimSpace(arrayParts[0])
+			index, err := strconv.Atoi(strings.TrimSpace(arrayParts[1]))
 			if err != nil {
 				return nil, fmt.Errorf("invalid array index: %s", arrayParts[1])
 			}
 
 			if key != "" {
+				var ok bool
 				switch v := current.(type) {
 				case JSONObject:
-					current = v[key]
+					current, ok = v[key]
 				case map[string]interface{}:
-					current = v[key]
+					current, ok = v[key]
 				default:
-					return nil, fmt.Errorf("cannot navigate further from %v", current)
+					return nil, fmt.Errorf("cannot navigate through non-object type at: %s", key)
+				}
+				if !ok {
+					return nil, fmt.Errorf("key not found: %s", key)
 				}
 			}
 
 			switch v := current.(type) {
 			case []interface{}:
 				if index < 0 || index >= len(v) {
-					return nil, fmt.Errorf("array index out of bounds: %d", index)
+					return nil, fmt.Errorf("array index out of bounds: %d, length: %d", index, len(v))
 				}
-				current = v[index]
+				if num, ok := v[index].(json.Number); ok {
+					f, err := num.Float64()
+					if err != nil {
+						return nil, err
+					}
+					current = f
+				} else {
+					current = v[index]
+				}
+			case JSONArray:
+				if index < 0 || index >= len(v) {
+					return nil, fmt.Errorf("array index out of bounds: %d, length: %d", index, len(v))
+				}
+				if num, ok := v[index].(json.Number); ok {
+					f, err := num.Float64()
+					if err != nil {
+						return nil, err
+					}
+					current = f
+				} else {
+					current = v[index]
+				}
 			default:
-				return nil, fmt.Errorf("cannot navigate further from %v", current)
+				return nil, fmt.Errorf("cannot access index on non-array type at: %s", part)
 			}
 		} else {
-			// Handle object access
+			var ok bool
 			switch v := current.(type) {
 			case JSONObject:
-				var ok bool
 				current, ok = v[part]
-				if !ok {
-					return nil, fmt.Errorf("key %s not found", part)
-				}
 			case map[string]interface{}:
-				var ok bool
 				current, ok = v[part]
-				if !ok {
-					return nil, fmt.Errorf("key %s not found", part)
-				}
 			default:
-				return nil, fmt.Errorf("cannot navigate further from %v", current)
+				return nil, fmt.Errorf("cannot access property on non-object type at: %s", part)
+			}
+			if !ok {
+				return nil, fmt.Errorf("key not found: %s", part)
 			}
 		}
 	}
@@ -311,10 +416,14 @@ func getPath(data interface{}, path string) (interface{}, error) {
 
 // ParseJSON parses a JSON string into a JSONObject
 func ParseJSON(jsonStr string) (JSONObject, error) {
+	if jsonStr == "" {
+		return nil, fmt.Errorf("empty JSON string")
+	}
 	var result JSONObject
-	err := json.Unmarshal([]byte(jsonStr), &result)
-	if err != nil {
-		return nil, err
+	d := json.NewDecoder(strings.NewReader(jsonStr))
+	d.UseNumber()
+	if err := d.Decode(&result); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	return result, nil
 }
@@ -329,12 +438,16 @@ func getString(data JSONObject, path JSONPath) (string, error) {
 	switch v := value.(type) {
 	case string:
 		return v, nil
+	case json.Number:
+		return v.String(), nil
 	case float64:
 		return strconv.FormatFloat(v, 'f', -1, 64), nil
 	case bool:
 		return strconv.FormatBool(v), nil
 	case int:
 		return strconv.Itoa(v), nil
+	case nil:
+		return "", fmt.Errorf("value at path %s is null", path)
 	default:
 		return "", fmt.Errorf("value at path %s is not a string", path)
 	}
@@ -346,6 +459,12 @@ func getInt(data JSONObject, path JSONPath) (int, error) {
 		return 0, err
 	}
 	switch v := value.(type) {
+	case json.Number:
+		i, err := v.Int64()
+		if err != nil {
+			return 0, err
+		}
+		return int(i), nil
 	case float64:
 		return int(v), nil
 	case int:
@@ -363,6 +482,8 @@ func getFloat(data JSONObject, path JSONPath) (float64, error) {
 		return 0, err
 	}
 	switch v := value.(type) {
+	case json.Number:
+		return v.Float64()
 	case float64:
 		return v, nil
 	case int:
@@ -396,9 +517,33 @@ func getArray(data JSONObject, path JSONPath) (JSONArray, error) {
 	}
 	switch arr := value.(type) {
 	case JSONArray:
-		return arr, nil
+		result := make(JSONArray, len(arr))
+		for i, v := range arr {
+			if num, ok := v.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				result[i] = f
+			} else {
+				result[i] = v
+			}
+		}
+		return result, nil
 	case []interface{}:
-		return JSONArray(arr), nil
+		result := make(JSONArray, len(arr))
+		for i, v := range arr {
+			if num, ok := v.(json.Number); ok {
+				f, err := num.Float64()
+				if err != nil {
+					return nil, err
+				}
+				result[i] = f
+			} else {
+				result[i] = v
+			}
+		}
+		return result, nil
 	default:
 		return nil, fmt.Errorf("value at path %s is not an array", path)
 	}
@@ -456,4 +601,31 @@ func GenerateJSONSchema(v interface{}) (map[string]interface{}, error) {
 	}
 
 	return schema, nil
+}
+
+// MustGet retrieves a value and panics on error
+func MustGet(data JSONObject, path JSONPath) interface{} {
+	v, err := Get(data, path)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// ToJSON converts any value to a JSON string
+func ToJSON(v interface{}) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal error: %w", err)
+	}
+	return string(b), nil
+}
+
+// MustToJSON converts any value to a JSON string and panics on error
+func MustToJSON(v interface{}) string {
+	s, err := ToJSON(v)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }

@@ -29,3 +29,4 @@ go.work.sum
 app.*
 logs/
 *.log
+xconfig/*.json

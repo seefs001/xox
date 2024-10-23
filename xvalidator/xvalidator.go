@@ -39,10 +39,13 @@ func Validate(v interface{}) []error {
 		return []error{fmt.Errorf("validation target must be a struct or pointer to struct, got %v", val.Kind())}
 	}
 
-	var errors []error
+	var errors []error = make([]error, 0)
 
 	for i := 0; i < val.NumField(); i++ {
 		field := val.Type().Field(i)
+		if !field.IsExported() {
+			continue
+		}
 		value := val.Field(i)
 		tag := field.Tag.Get("xv")
 
@@ -52,11 +55,15 @@ func Validate(v interface{}) []error {
 
 		validators := strings.Split(tag, ",")
 		for _, validator := range validators {
+			validator = strings.TrimSpace(validator)
+			if validator == "" {
+				continue
+			}
 			parts := strings.SplitN(validator, "=", 2)
-			validatorName := parts[0]
+			validatorName := strings.TrimSpace(parts[0])
 			var validatorArg string
 			if len(parts) > 1 {
-				validatorArg = parts[1]
+				validatorArg = strings.TrimSpace(parts[1])
 			}
 
 			if err := applyValidator(validatorName, validatorArg, field.Name, value.Interface()); err != nil {
@@ -216,10 +223,14 @@ func max(field string, value interface{}, arg string) error {
 func email(field string, value interface{}) error {
 	str, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("email validator requires a string for field %s", field)
+		if v := reflect.ValueOf(value); v.Kind() == reflect.Ptr && !v.IsNil() && v.Elem().Kind() == reflect.String {
+			str = v.Elem().String()
+		} else {
+			return fmt.Errorf("email validator requires a string for field %s", field)
+		}
 	}
 	if str == "" {
-		return nil // Allow empty email unless required is also specified
+		return nil
 	}
 	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 	if !emailRegex.MatchString(str) {
@@ -285,11 +296,21 @@ func in(field string, value interface{}, arg string) error {
 	}
 
 	options := strings.Split(arg, "|")
-	v := reflect.ValueOf(value)
-	strValue := fmt.Sprintf("%v", v.Interface())
+	for i, opt := range options {
+		options[i] = strings.TrimSpace(opt)
+	}
 
+	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+
+	strValue := fmt.Sprintf("%v", v.Interface())
 	if strValue == "" {
-		return nil // Allow empty string unless required is also specified
+		return nil
 	}
 
 	for _, option := range options {
@@ -306,8 +327,23 @@ func notIn(field string, value interface{}, arg string) error {
 	}
 
 	options := strings.Split(arg, "|")
+	for i, opt := range options {
+		options[i] = strings.TrimSpace(opt)
+	}
+
 	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+
 	strValue := fmt.Sprintf("%v", v.Interface())
+	if strValue == "" {
+		return nil
+	}
+
 	for _, option := range options {
 		if strValue == option {
 			return ValidationError{Field: field, Message: fmt.Sprintf("Must not be one of: %s", arg)}
