@@ -32,6 +32,7 @@ type jobEntry struct {
 	job      Job
 	next     time.Time
 	id       string
+	runOnAdd bool
 }
 
 // New creates a new Cron instance with default tick interval of 1 second
@@ -59,15 +60,20 @@ func NewWithTickInterval(interval time.Duration) *Cron {
 
 // AddFunc adds a function to be executed on the given schedule
 func (c *Cron) AddFunc(spec string, cmd func()) (string, error) {
+	return c.AddFuncWithOptions(spec, cmd, false)
+}
+
+// AddFuncWithOptions adds a function with additional options
+func (c *Cron) AddFuncWithOptions(spec string, cmd func(), runOnAdd bool) (string, error) {
 	schedule, err := parseSchedule(spec)
 	if err != nil {
 		return "", err
 	}
-	return c.addJob(schedule, Job(cmd)), nil
+	return c.addJobWithOptions(schedule, Job(cmd), runOnAdd), nil
 }
 
-// addJob adds a job to be run on the given schedule
-func (c *Cron) addJob(schedule Schedule, cmd Job) string {
+// addJobWithOptions adds a job with additional options
+func (c *Cron) addJobWithOptions(schedule Schedule, cmd Job, runOnAdd bool) string {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -75,10 +81,14 @@ func (c *Cron) addJob(schedule Schedule, cmd Job) string {
 		schedule: schedule,
 		job:      cmd,
 		id:       fmt.Sprintf("%p", cmd),
+		runOnAdd: runOnAdd,
 	}
 
 	now := time.Now().In(c.location)
-	job.next = schedule.Next(now) // Initialize next execution time
+	if runOnAdd {
+		go job.job()
+	}
+	job.next = schedule.Next(now)
 	c.jobs = append(c.jobs, job)
 
 	return job.id
@@ -97,7 +107,20 @@ func (c *Cron) Remove(id string) {
 	}
 }
 
-// Start begins the cron scheduler
+// StartBlocking begins the cron scheduler and blocks until Stop is called
+func (c *Cron) StartBlocking() {
+	c.mutex.Lock()
+	if c.running {
+		c.mutex.Unlock()
+		return
+	}
+	c.running = true
+	c.mutex.Unlock()
+
+	c.run()
+}
+
+// Start begins the cron scheduler in non-blocking mode
 func (c *Cron) Start() {
 	c.mutex.Lock()
 	if c.running {
