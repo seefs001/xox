@@ -1371,28 +1371,62 @@ func (r *Request) SetQueryParam(key, value string) *Request {
 	return r
 }
 
-// Get sends a GET request
-func (r *Request) Get(ctx context.Context, url string) *Request {
+const (
+	// Content type constants
+	ContentTypeJSON          = "application/json"
+	ContentTypeXML           = "application/xml"
+	ContentTypeForm          = "application/x-www-form-urlencoded"
+	ContentTypeMultipartForm = "multipart/form-data"
+	ContentTypeTextPlain     = "text/plain"
+	ContentTypeOctetStream   = "application/octet-stream"
+	ContentTypeHTML          = "text/html"
+
+	// Default content type
+	DefaultContentType = ContentTypeJSON
+)
+
+// Get sends a GET request with specified content type
+func (r *Request) Get(ctx context.Context, contentType, url string) *Request {
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	r.SetHeader("Content-Type", contentType)
 	return r.Execute(ctx, http.MethodGet, url)
 }
 
-// Post sends a POST request
-func (r *Request) Post(ctx context.Context, url string) *Request {
+// Post sends a POST request with specified content type
+func (r *Request) Post(ctx context.Context, contentType, url string) *Request {
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	r.SetHeader("Content-Type", contentType)
 	return r.Execute(ctx, http.MethodPost, url)
 }
 
-// Put sends a PUT request
-func (r *Request) Put(ctx context.Context, url string) *Request {
+// Put sends a PUT request with specified content type
+func (r *Request) Put(ctx context.Context, contentType, url string) *Request {
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	r.SetHeader("Content-Type", contentType)
 	return r.Execute(ctx, http.MethodPut, url)
 }
 
-// Patch sends a PATCH request
-func (r *Request) Patch(ctx context.Context, url string) *Request {
+// Patch sends a PATCH request with specified content type
+func (r *Request) Patch(ctx context.Context, contentType, url string) *Request {
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	r.SetHeader("Content-Type", contentType)
 	return r.Execute(ctx, http.MethodPatch, url)
 }
 
-// Delete sends a DELETE request
-func (r *Request) Delete(ctx context.Context, url string) *Request {
+// Delete sends a DELETE request with specified content type
+func (r *Request) Delete(ctx context.Context, contentType, url string) *Request {
+	if contentType == "" {
+		contentType = DefaultContentType
+	}
+	r.SetHeader("Content-Type", contentType)
 	return r.Execute(ctx, http.MethodDelete, url)
 }
 

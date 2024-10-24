@@ -2,6 +2,7 @@ package xcast_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/seefs001/xox/xcast"
 	"github.com/stretchr/testify/assert"
@@ -441,6 +442,212 @@ func TestStructToStringComplexCases(t *testing.T) {
 				assert.NoError(t, err)
 				assert.JSONEq(t, tt.expected, result)
 			}
+		})
+	}
+}
+
+func TestStringToBool(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"1", true},
+		{"t", true},
+		{"true", true},
+		{"yes", true},
+		{"y", true},
+		{"on", true},
+		{"0", false},
+		{"f", false},
+		{"false", false},
+		{"no", false},
+		{"n", false},
+		{"off", false},
+		{"", false},
+		{"random", false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := xcast.StringToBool(test.input)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestStringToInt(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+		hasError bool
+	}{
+		{"42", 42, false},
+		{"-42", -42, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToInt(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToInt64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		hasError bool
+	}{
+		{"9223372036854775807", 9223372036854775807, false},
+		{"-9223372036854775808", -9223372036854775808, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToInt64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToUint(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint
+		hasError bool
+	}{
+		{"42", 42, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"-1", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToUint(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToUint64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint64
+		hasError bool
+	}{
+		{"18446744073709551615", 18446744073709551615, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"-1", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToUint64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToFloat64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected float64
+		hasError bool
+	}{
+		{"3.14", 3.14, false},
+		{"-2.5", -2.5, false},
+		{"0", 0, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToFloat64(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToDuration(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected time.Duration
+		hasError bool
+	}{
+		{"5s", 5 * time.Second, false},
+		{"10m", 10 * time.Minute, false},
+		{"2h30m", 2*time.Hour + 30*time.Minute, false},
+		{"", 0, true},
+		{"invalid", 0, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := xcast.StringToDuration(test.input)
+			if test.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected, result)
+			}
+		})
+	}
+}
+
+func TestStringToMap(t *testing.T) {
+	tests := []struct {
+		input    string
+		pairSep  string
+		kvSep    string
+		expected map[string]string
+	}{
+		{"key1=value1,key2=value2", ",", "=", map[string]string{"key1": "value1", "key2": "value2"}},
+		{"k1:v1;k2:v2", ";", ":", map[string]string{"k1": "v1", "k2": "v2"}},
+		{"", ",", "=", map[string]string{}},
+		{"invalid", ",", "=", map[string]string{}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := xcast.StringToMap(test.input, test.pairSep, test.kvSep)
+			assert.Equal(t, test.expected, result)
 		})
 	}
 }

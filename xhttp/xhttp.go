@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seefs001/xox/x"
+	"github.com/seefs001/xox/xcast"
 	"github.com/seefs001/xox/xerror"
 )
 
@@ -98,22 +99,22 @@ func (c *Context) GetParam(key string) string {
 
 // GetParamInt retrieves a URL parameter as an integer
 func (c *Context) GetParamInt(key string) (int, error) {
-	return x.StringToInt(c.GetParam(key))
+	return xcast.StringToInt(c.GetParam(key))
 }
 
 // GetParamInt64 retrieves a URL parameter as an int64
 func (c *Context) GetParamInt64(key string) (int64, error) {
-	return x.StringToInt64(c.GetParam(key))
+	return xcast.StringToInt64(c.GetParam(key))
 }
 
 // GetParamFloat retrieves a URL parameter as a float64
 func (c *Context) GetParamFloat(key string) (float64, error) {
-	return x.StringToFloat64(c.GetParam(key))
+	return xcast.StringToFloat64(c.GetParam(key))
 }
 
 // GetParamBool retrieves a URL parameter as a boolean
 func (c *Context) GetParamBool(key string) bool {
-	return x.StringToBool(c.GetParam(key))
+	return xcast.StringToBool(c.GetParam(key))
 }
 
 // GetHeader retrieves a header value
@@ -346,17 +347,17 @@ func ListenAndServeTLS(addr, certFile, keyFile string, handler http.Handler) err
 
 // GetParamUint retrieves a URL parameter as an unsigned integer
 func (c *Context) GetParamUint(key string) (uint, error) {
-	return x.StringToUint(c.GetParam(key))
+	return xcast.StringToUint(c.GetParam(key))
 }
 
 // GetParamUint64 retrieves a URL parameter as an uint64
 func (c *Context) GetParamUint64(key string) (uint64, error) {
-	return x.StringToUint64(c.GetParam(key))
+	return xcast.StringToUint64(c.GetParam(key))
 }
 
 // GetParamDuration retrieves a URL parameter as a time.Duration
 func (c *Context) GetParamDuration(key string) (time.Duration, error) {
-	return x.StringToDuration(c.GetParam(key))
+	return xcast.StringToDuration(c.GetParam(key))
 }
 
 // GetParamTime retrieves a URL parameter as a time.Time

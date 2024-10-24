@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/seefs001/xox/xerror"
 )
@@ -474,4 +475,57 @@ func MustToBool(value any) bool {
 		return false
 	}
 	return b
+}
+
+// StringToBool converts a string to a boolean
+func StringToBool(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "1" || s == "t" || s == "true" || s == "yes" || s == "y" || s == "on"
+}
+
+// StringToInt converts a string to an int
+func StringToInt(s string) (int, error) {
+	return strconv.Atoi(strings.TrimSpace(s))
+}
+
+// StringToInt64 converts a string to an int64
+func StringToInt64(s string) (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+}
+
+// StringToUint converts a string to a uint
+func StringToUint(s string) (uint, error) {
+	v, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return uint(v), nil
+}
+
+// StringToUint64 converts a string to a uint64
+func StringToUint64(s string) (uint64, error) {
+	return strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+}
+
+// StringToFloat64 converts a string to a float64
+func StringToFloat64(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
+}
+
+// StringToDuration converts a string to a time.Duration
+func StringToDuration(s string) (time.Duration, error) {
+	return time.ParseDuration(strings.TrimSpace(s))
+}
+
+// StringToMap converts a string to a map[string]string
+func StringToMap(s, pairSep, kvSep string) map[string]string {
+	m := make(map[string]string)
+	pairs := strings.Split(s, pairSep)
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, kvSep, 2)
+		if len(kv) == 2 {
+			m[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return m
 }

@@ -17,6 +17,7 @@ type Error struct {
 	Timestamp time.Time
 	Code      int
 	Context   map[string]interface{}
+	UserMsg   string // User-friendly error message
 }
 
 // Error returns the error message
@@ -43,6 +44,11 @@ func (e *Error) Error() string {
 	return sb.String()
 }
 
+// String implements the fmt.Stringer interface
+func (e *Error) String() string {
+	return e.Error()
+}
+
 // ToJSON converts the error to a JSON string
 // Usage: jsonStr, err := xerror.ToJSON(err)
 func (e *Error) ToJSON() (string, error) {
@@ -52,6 +58,7 @@ func (e *Error) ToJSON() (string, error) {
 
 	type jsonError struct {
 		Message   string                 `json:"message"`
+		UserMsg   string                 `json:"user_message"`
 		Code      int                    `json:"code"`
 		Timestamp string                 `json:"timestamp"`
 		Stack     string                 `json:"stack"`
@@ -62,6 +69,7 @@ func (e *Error) ToJSON() (string, error) {
 		Code:      e.Code,
 		Timestamp: e.Timestamp.Format(time.RFC3339),
 		Stack:     e.Stack,
+		UserMsg:   e.GetUserMsg(),
 	}
 
 	if e.Err != nil {
@@ -85,8 +93,9 @@ func New(msg string) *Error {
 		Err:       errors.New(msg),
 		Stack:     getStack(),
 		Timestamp: time.Now(),
-		Code:      0,
+		Code:      1,
 		Context:   make(map[string]interface{}),
+		UserMsg:   msg, // Default to technical message
 	}
 }
 
@@ -112,7 +121,7 @@ func Wrap(err error, msg string) *Error {
 		Err:       fmt.Errorf("%s: %w", msg, err),
 		Stack:     getStack(),
 		Timestamp: time.Now(),
-		Code:      0,
+		Code:      1,
 		Context:   make(map[string]interface{}),
 	}
 }
@@ -127,7 +136,7 @@ func Wrapf(err error, format string, args ...interface{}) *Error {
 		Err:       fmt.Errorf(format+": %w", append(args, err)...),
 		Stack:     getStack(),
 		Timestamp: time.Now(),
-		Code:      0,
+		Code:      1,
 		Context:   make(map[string]interface{}),
 	}
 }
@@ -523,6 +532,40 @@ func GetCode(err error) int {
 func GetStack(err error) string {
 	if xerr, ok := err.(*Error); ok && xerr != nil {
 		return xerr.Stack
+	}
+	return ""
+}
+
+// NewWithUserMsg creates a new Error with separate technical and user-friendly messages
+func NewWithUserMsg(msg string, userMsg string) *Error {
+	return &Error{
+		Err:       errors.New(msg),
+		Stack:     getStack(),
+		Timestamp: time.Now(),
+		Code:      1,
+		Context:   make(map[string]interface{}),
+		UserMsg:   userMsg,
+	}
+}
+
+// SetUserMsg sets a user-friendly error message
+func (e *Error) SetUserMsg(msg string) *Error {
+	if e != nil {
+		e.UserMsg = msg
+	}
+	return e
+}
+
+// GetUserMsg returns the user-friendly error message or the technical message if not set
+func (e *Error) GetUserMsg() string {
+	if e == nil {
+		return ""
+	}
+	if e.UserMsg != "" {
+		return e.UserMsg
+	}
+	if e.Err != nil {
+		return e.Err.Error()
 	}
 	return ""
 }
