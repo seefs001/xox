@@ -77,7 +77,7 @@ func DefaultOptions() Options {
 		ValueLogFileSize:    1 << 30, // 1GB
 		NumVersionsToKeep:   1,
 		CompactionL0Trigger: 10,
-		EnableVersioning:    false,
+		EnableVersioning:    true, // default to true
 		MaxVersions:         10,
 	}
 }
@@ -1282,63 +1282,52 @@ func (db *DB) ExportToJSON() (string, error) {
 		// Format value based on type
 		switch entry.Type {
 		case String:
-			if !db.options.EnableVersioning {
-				value = entry.Value.(string)
-			} else {
-				value = formatVersionedEntry(entry)
-			}
+			// Always format with versions
+			value = formatVersionedEntry(entry)
 
 		case List:
-			if !db.options.EnableVersioning {
-				value = entry.Value.([]string)
-			} else {
-				listValue := map[string]interface{}{
-					"type":         entry.Type,
-					"value":        entry.Value.([]string),
-					"version":      entry.Version,
-					"created":      entry.Created,
-					"last_updated": entry.LastUpdated,
-				}
-				if len(entry.Versions) > 0 {
-					versions := make([]map[string]interface{}, len(entry.Versions))
-					for i, v := range entry.Versions {
-						versions[i] = map[string]interface{}{
-							"value":        v.Value.([]string),
-							"version":      v.Version,
-							"created":      v.Created,
-							"last_updated": v.LastUpdated,
-						}
-					}
-					listValue["versions"] = versions
-				}
-				value = listValue
+			listValue := map[string]interface{}{
+				"type":         entry.Type,
+				"value":        entry.Value.([]string),
+				"version":      entry.Version,
+				"created":      entry.Created,
+				"last_updated": entry.LastUpdated,
 			}
+			if len(entry.Versions) > 0 {
+				versions := make([]map[string]interface{}, len(entry.Versions))
+				for i, v := range entry.Versions {
+					versions[i] = map[string]interface{}{
+						"value":        v.Value.([]string),
+						"version":      v.Version,
+						"created":      v.Created,
+						"last_updated": v.LastUpdated,
+					}
+				}
+				listValue["versions"] = versions
+			}
+			value = listValue
 
 		case Hash:
-			if !db.options.EnableVersioning {
-				value = entry.Value.(map[string]string)
-			} else {
-				hashValue := map[string]interface{}{
-					"type":         entry.Type,
-					"value":        entry.Value.(map[string]string),
-					"version":      entry.Version,
-					"created":      entry.Created,
-					"last_updated": entry.LastUpdated,
-				}
-				if len(entry.Versions) > 0 {
-					versions := make([]map[string]interface{}, len(entry.Versions))
-					for i, v := range entry.Versions {
-						versions[i] = map[string]interface{}{
-							"value":        v.Value.(map[string]string),
-							"version":      v.Version,
-							"created":      v.Created,
-							"last_updated": v.LastUpdated,
-						}
-					}
-					hashValue["versions"] = versions
-				}
-				value = hashValue
+			hashValue := map[string]interface{}{
+				"type":         entry.Type,
+				"value":        entry.Value.(map[string]string),
+				"version":      entry.Version,
+				"created":      entry.Created,
+				"last_updated": entry.LastUpdated,
 			}
+			if len(entry.Versions) > 0 {
+				versions := make([]map[string]interface{}, len(entry.Versions))
+				for i, v := range entry.Versions {
+					versions[i] = map[string]interface{}{
+						"value":        v.Value.(map[string]string),
+						"version":      v.Version,
+						"created":      v.Created,
+						"last_updated": v.LastUpdated,
+					}
+				}
+				hashValue["versions"] = versions
+			}
+			value = hashValue
 
 		case Set:
 			set := entry.Value.(map[string]struct{})
@@ -1348,62 +1337,54 @@ func (db *DB) ExportToJSON() (string, error) {
 			}
 			sort.Strings(members)
 
-			if !db.options.EnableVersioning {
-				value = members
-			} else {
-				setValue := map[string]interface{}{
-					"type":         entry.Type,
-					"value":        members,
-					"version":      entry.Version,
-					"created":      entry.Created,
-					"last_updated": entry.LastUpdated,
-				}
-				if len(entry.Versions) > 0 {
-					versions := make([]map[string]interface{}, len(entry.Versions))
-					for i, v := range entry.Versions {
-						vset := v.Value.(map[string]struct{})
-						vmembers := make([]string, 0, len(vset))
-						for member := range vset {
-							vmembers = append(vmembers, member)
-						}
-						sort.Strings(vmembers)
-						versions[i] = map[string]interface{}{
-							"value":        vmembers,
-							"version":      v.Version,
-							"created":      v.Created,
-							"last_updated": v.LastUpdated,
-						}
-					}
-					setValue["versions"] = versions
-				}
-				value = setValue
+			setValue := map[string]interface{}{
+				"type":         entry.Type,
+				"value":        members,
+				"version":      entry.Version,
+				"created":      entry.Created,
+				"last_updated": entry.LastUpdated,
 			}
+			if len(entry.Versions) > 0 {
+				versions := make([]map[string]interface{}, len(entry.Versions))
+				for i, v := range entry.Versions {
+					vset := v.Value.(map[string]struct{})
+					vmembers := make([]string, 0, len(vset))
+					for member := range vset {
+						vmembers = append(vmembers, member)
+					}
+					sort.Strings(vmembers)
+					versions[i] = map[string]interface{}{
+						"value":        vmembers,
+						"version":      v.Version,
+						"created":      v.Created,
+						"last_updated": v.LastUpdated,
+					}
+				}
+				setValue["versions"] = versions
+			}
+			value = setValue
 
 		case ZSet:
-			if !db.options.EnableVersioning {
-				value = entry.Value.([]ZSetMember)
-			} else {
-				zsetValue := map[string]interface{}{
-					"type":         entry.Type,
-					"value":        entry.Value.([]ZSetMember),
-					"version":      entry.Version,
-					"created":      entry.Created,
-					"last_updated": entry.LastUpdated,
-				}
-				if len(entry.Versions) > 0 {
-					versions := make([]map[string]interface{}, len(entry.Versions))
-					for i, v := range entry.Versions {
-						versions[i] = map[string]interface{}{
-							"value":        v.Value.([]ZSetMember),
-							"version":      v.Version,
-							"created":      v.Created,
-							"last_updated": v.LastUpdated,
-						}
-					}
-					zsetValue["versions"] = versions
-				}
-				value = zsetValue
+			zsetValue := map[string]interface{}{
+				"type":         entry.Type,
+				"value":        entry.Value.([]ZSetMember),
+				"version":      entry.Version,
+				"created":      entry.Created,
+				"last_updated": entry.LastUpdated,
 			}
+			if len(entry.Versions) > 0 {
+				versions := make([]map[string]interface{}, len(entry.Versions))
+				for i, v := range entry.Versions {
+					versions[i] = map[string]interface{}{
+						"value":        v.Value.([]ZSetMember),
+						"version":      v.Version,
+						"created":      v.Created,
+						"last_updated": v.LastUpdated,
+					}
+				}
+				zsetValue["versions"] = versions
+			}
+			value = zsetValue
 		}
 
 		exportData[key] = value
