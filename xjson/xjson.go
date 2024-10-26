@@ -195,7 +195,7 @@ func Map(data interface{}, fn func(key interface{}, value interface{}) (interfac
 		}
 		return result, nil
 	default:
-		return nil, fmt.Errorf("Map can only be applied to JSONObject, JSONArray, or []interface{}")
+		return nil, fmt.Errorf("map can only be applied to JSONObject, JSONArray, or []interface{}")
 	}
 }
 

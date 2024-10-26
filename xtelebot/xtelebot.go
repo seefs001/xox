@@ -1323,3 +1323,28 @@ func (b *Bot) uploadFile(ctx context.Context, method string, params url.Values, 
 
 	return resp, nil
 }
+
+// EscapeMarkdownV2 escapes MarkdownV2 reserved characters
+func EscapeMarkdownV2(text string) string {
+	replacer := strings.NewReplacer(
+		"_", "\\_",
+		"*", "\\*",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"~", "\\~",
+		"`", "\\`",
+		">", "\\>",
+		"#", "\\#",
+		"+", "\\+",
+		"-", "\\-",
+		"=", "\\=",
+		"|", "\\|",
+		"{", "\\{",
+		"}", "\\}",
+		".", "\\.",
+		"!", "\\!",
+	)
+	return replacer.Replace(text)
+}
