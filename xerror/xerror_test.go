@@ -2,6 +2,7 @@ package xerror_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,16 +40,66 @@ func TestWrapWithCode(t *testing.T) {
 }
 
 func TestIs(t *testing.T) {
-	err := xerror.New("test error")
-	assert.True(t, xerror.Is(err, err))
-	assert.False(t, xerror.Is(err, errors.New("different error")))
+	// Test standard error comparison
+	stdErr := errors.New("standard error")
+	xerr := xerror.Wrap(stdErr, "wrapped")
+	assert.True(t, xerror.Is(xerr, stdErr))
+
+	// Test xerror comparison
+	targetXerr := xerror.New("target error")
+	wrappedXerr := xerror.Wrap(targetXerr, "wrapped")
+	assert.True(t, xerror.Is(wrappedXerr, targetXerr))
+
+	// Test nil cases
+	assert.True(t, xerror.Is(nil, nil))
+	assert.False(t, xerror.Is(xerr, nil))
+	assert.False(t, xerror.Is(nil, xerr))
 }
 
 func TestAs(t *testing.T) {
-	err := xerror.New("test error")
+	// Test conversion from xerror to xerror
+	originalErr := xerror.New("test error")
 	var xerr *xerror.Error
-	assert.True(t, xerror.As(err, &xerr))
-	assert.NotNil(t, xerr)
+	assert.True(t, xerror.As(originalErr, &xerr))
+	assert.Equal(t, originalErr, xerr)
+
+	// Test conversion from standard error to xerror
+	stdErr := errors.New("standard error")
+	var convertedXerr *xerror.Error
+	assert.True(t, xerror.As(stdErr, &convertedXerr))
+	assert.Equal(t, stdErr.Error(), convertedXerr.Err.Error())
+
+	// Test conversion to different error type
+	var stdErrTarget error
+	assert.True(t, xerror.As(originalErr, &stdErrTarget))
+
+	// Test nil case
+	assert.False(t, xerror.As(nil, &xerr))
+}
+
+func TestUnwrap(t *testing.T) {
+	// Test unwrapping xerror
+	innerErr := errors.New("inner error")
+	xerr := xerror.Wrap(innerErr, "wrapped")
+	unwrapped := xerror.Unwrap(xerr)
+	assert.Equal(t, "wrapped: inner error", unwrapped.Error())
+
+	// Test unwrapping standard error
+	stdErr := fmt.Errorf("outer: %w", errors.New("inner"))
+	unwrappedStd := xerror.Unwrap(stdErr)
+	assert.Equal(t, "inner", unwrappedStd.Error())
+
+	// Test unwrapping nil
+	assert.Nil(t, xerror.Unwrap(nil))
+
+	// Test unwrapping non-wrapped error
+	plainErr := errors.New("plain error")
+	assert.Equal(t, plainErr, xerror.Unwrap(plainErr))
+
+	// Test multiple levels of wrapping
+	multiWrap := xerror.Wrap(xerror.Wrap(innerErr, "level 1"), "level 2")
+	unwrappedMulti := xerror.Unwrap(multiWrap)
+	assert.Equal(t, "level 2: level 1: inner error", unwrappedMulti.Error())
 }
 
 func TestWithContext(t *testing.T) {
@@ -162,10 +213,27 @@ func TestMustNoError(t *testing.T) {
 }
 
 func TestCause(t *testing.T) {
-	rootErr := errors.New("root error")
-	wrappedErr := xerror.Wrap(rootErr, "wrapped error")
-	cause := xerror.Cause(wrappedErr)
-	assert.Equal(t, rootErr, cause)
+	// Test with multiple wrapping levels
+	root := errors.New("root error")
+	level1 := xerror.Wrap(root, "level 1")
+	level2 := xerror.Wrap(level1, "level 2")
+	cause := xerror.Cause(level2)
+	assert.Equal(t, root, cause)
+
+	// Test with standard error wrapping
+	stdRoot := errors.New("std root")
+	stdWrapped := fmt.Errorf("wrapped: %w", stdRoot)
+	stdCause := xerror.Cause(stdWrapped)
+	assert.Equal(t, stdRoot, stdCause)
+
+	// Test with xerror at root
+	xerrRoot := xerror.New("xerror root")
+	xerrWrapped := xerror.Wrap(xerrRoot, "wrapped")
+	xerrCause := xerror.Cause(xerrWrapped)
+	assert.Equal(t, xerrRoot.Err, xerrCause)
+
+	// Test nil case
+	assert.Nil(t, xerror.Cause(nil))
 }
 
 func TestJoin(t *testing.T) {
@@ -184,4 +252,23 @@ func TestWithStack(t *testing.T) {
 	xerr, ok := stackErr.(*xerror.Error)
 	assert.True(t, ok)
 	assert.NotEmpty(t, xerr.Stack)
+}
+
+func TestErrorChainInteraction(t *testing.T) {
+	// Create a mixed error chain
+	rootErr := errors.New("root error")
+	xerr := xerror.Wrap(rootErr, "xerror wrap")
+	stdWrap := fmt.Errorf("std wrap: %w", xerr)
+	finalXerr := xerror.Wrap(stdWrap, "final wrap")
+
+	// Test Is through the chain
+	assert.True(t, xerror.Is(finalXerr, rootErr))
+
+	// Test As through the chain
+	var targetXerr *xerror.Error
+	assert.True(t, xerror.As(finalXerr, &targetXerr))
+
+	// Test Cause through the chain
+	cause := xerror.Cause(finalXerr)
+	assert.Equal(t, rootErr, cause)
 }

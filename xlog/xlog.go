@@ -166,9 +166,9 @@ func NewColorConsoleHandler(w io.Writer, opts *slog.HandlerOptions) (*ColorConso
 	return &ColorConsoleHandler{
 		w:             w,
 		opts:          opts,
-		format:        "%s[%l] [%t] %m%a", // Default format: source [level] [time] message attributes
-		maxMessageLen: 0,                  // Default to no limit
-		maxAttrLen:    0,                  // Default to no limit
+		format:        "[%l][%s][%t] %m%a", // Default format: [level][source][time] message attributes
+		maxMessageLen: 0,                   // Default to no limit
+		maxAttrLen:    0,                   // Default to no limit
 	}, nil
 }
 

@@ -25,23 +25,10 @@ func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Error occurred at: %s\n", e.Timestamp.Format(time.RFC3339)))
 	if e.Err != nil {
-		sb.WriteString(fmt.Sprintf("Error message: %s\n", e.Err.Error()))
+		return e.Err.Error()
 	}
-	sb.WriteString(fmt.Sprintf("Error code: %d\n", e.Code))
-	if e.Context != nil && len(e.Context) > 0 {
-		sb.WriteString("Context:\n")
-		for key, value := range e.Context {
-			sb.WriteString(fmt.Sprintf("  %s: %v\n", key, value))
-		}
-	}
-	if e.Stack != "" {
-		sb.WriteString("Stack trace:\n")
-		sb.WriteString(e.Stack)
-	}
-	return sb.String()
+	return ""
 }
 
 // String implements the fmt.Stringer interface
@@ -169,15 +156,56 @@ func WrapWithCode(err error, msg string, code int) *Error {
 }
 
 // Is reports whether any error in err's chain matches target
-// Usage: if xerror.Is(err, ErrNotFound) { ... }
 func Is(err, target error) bool {
+	if err == nil || target == nil {
+		return err == target
+	}
+
+	// Handle when target is xerror type
+	if t, ok := target.(*Error); ok {
+		if xe, ok := err.(*Error); ok {
+			return xe.Is(t)
+		}
+		return errors.Is(err, t.Err)
+	}
+
+	// Handle when err is xerror type
+	if xe, ok := err.(*Error); ok {
+		return errors.Is(xe.Err, target)
+	}
+
+	// Fallback to standard errors.Is
 	return errors.Is(err, target)
 }
 
-// As finds the first error in err's chain that matches target, and if so, sets
-// target to that error value and returns true. Otherwise, it returns false.
-// Usage: var customErr *CustomError; if xerror.As(err, &customErr) { ... }
+// As finds the first error in err's chain that matches target
 func As(err error, target interface{}) bool {
+	if err == nil {
+		return false
+	}
+
+	// Handle xerror type
+	if xe, ok := err.(*Error); ok {
+		if t, ok := target.(**Error); ok {
+			*t = xe
+			return true
+		}
+		return errors.As(xe.Err, target)
+	}
+
+	// Try to convert standard error to xerror
+	if t, ok := target.(**Error); ok {
+		*t = &Error{
+			Err:       err,
+			Stack:     getStack(),
+			Timestamp: time.Now(),
+			Code:      int(GetErrorCode(err)),
+			Context:   make(map[string]interface{}),
+		}
+		return true
+	}
+
+	// Fallback to standard errors.As
 	return errors.As(err, target)
 }
 
@@ -213,24 +241,6 @@ func RecoverError(err *error) {
 		*err = fmt.Errorf("%v", r)
 	}
 }
-
-// ErrNotFound is a sentinel error for when a resource is not found
-var ErrNotFound = errors.New("resource not found")
-
-// ErrUnauthorized is a sentinel error for when a user is not authorized
-var ErrUnauthorized = errors.New("unauthorized access")
-
-// ErrInvalidInput is a sentinel error for when input is invalid
-var ErrInvalidInput = errors.New("invalid input")
-
-// ErrTimeout is a sentinel error for when an operation times out
-var ErrTimeout = errors.New("operation timed out")
-
-// ErrDatabaseConnection is a sentinel error for database connection issues
-var ErrDatabaseConnection = errors.New("database connection error")
-
-// ErrInternalServer is a sentinel error for internal server errors
-var ErrInternalServer = errors.New("internal server error")
 
 // ErrorCode represents error codes for different types of errors
 type ErrorCode int
@@ -327,18 +337,28 @@ func MustNoError[T any](value T, err error) T {
 }
 
 // Cause returns the root cause of the error
-// Usage: rootErr := xerror.Cause(err)
 func Cause(err error) error {
-	for err != nil {
-		xerr, ok := err.(*Error)
-		if ok {
-			err = xerr.Err
-		} else {
-			cause, ok := err.(interface{ Unwrap() error })
-			if !ok {
-				break
+	if err == nil {
+		return nil
+	}
+
+	current := err
+	for current != nil {
+		switch e := current.(type) {
+		case *Error:
+			if e.Err == nil {
+				return e
 			}
-			err = cause.Unwrap()
+			current = e.Err
+		default:
+			if u, ok := current.(interface{ Unwrap() error }); ok {
+				current = u.Unwrap()
+				if current == nil {
+					return e
+				}
+			} else {
+				return e
+			}
 		}
 	}
 	return err
@@ -569,3 +589,113 @@ func (e *Error) GetUserMsg() string {
 	}
 	return ""
 }
+
+// Unwrap returns the underlying error
+func Unwrap(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	// Handle xerror type
+	if xe, ok := err.(*Error); ok {
+		return xe.Err
+	}
+
+	// Handle standard error unwrapping
+	if u, ok := err.(interface{ Unwrap() error }); ok {
+		return u.Unwrap()
+	}
+
+	// Return the error itself if it can't be unwrapped
+	return err
+}
+
+// Unwrap implements the errors.Unwrap interface
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// Is implements the errors.Is interface
+func (e *Error) Is(target error) bool {
+	if e == nil {
+		return target == nil
+	}
+
+	// Check if target is *Error
+	if t, ok := target.(*Error); ok {
+		return errors.Is(e.Err, t.Err)
+	}
+
+	// Compare with standard error
+	return errors.Is(e.Err, target)
+}
+
+// As implements the errors.As interface
+func (e *Error) As(target interface{}) bool {
+	if e == nil {
+		return false
+	}
+
+	// Try to convert to *Error first
+	if t, ok := target.(**Error); ok {
+		*t = e
+		return true
+	}
+
+	// Fallback to standard error handling
+	return errors.As(e.Err, target)
+}
+
+// Predefined errors with xerror type
+var (
+	ErrNotFound = &Error{
+		Err:       errors.New("resource not found"),
+		Code:      int(CodeNotFound),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+
+	ErrUnauthorized = &Error{
+		Err:       errors.New("unauthorized access"),
+		Code:      int(CodeUnauthorized),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+
+	ErrInvalidInput = &Error{
+		Err:       errors.New("invalid input"),
+		Code:      int(CodeInvalidInput),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+
+	ErrTimeout = &Error{
+		Err:       errors.New("operation timed out"),
+		Code:      int(CodeTimeout),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+
+	ErrDatabaseConnection = &Error{
+		Err:       errors.New("database connection error"),
+		Code:      int(CodeDatabaseConnection),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+
+	ErrInternalServer = &Error{
+		Err:       errors.New("internal server error"),
+		Code:      int(CodeInternalServer),
+		Timestamp: time.Now(),
+		Stack:     getStack(),
+		Context:   make(map[string]interface{}),
+	}
+)
