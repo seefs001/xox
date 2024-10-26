@@ -56,6 +56,12 @@ type Options struct {
 
 	// CompactionL0Trigger is the number of L0 tables that triggers compaction
 	CompactionL0Trigger int
+
+	// EnableVersioning enables multi-version support
+	EnableVersioning bool
+
+	// MaxVersions specifies maximum versions to keep per key (0 means unlimited)
+	MaxVersions int
 }
 
 // DefaultOptions returns default configuration options
@@ -71,6 +77,8 @@ func DefaultOptions() Options {
 		ValueLogFileSize:    1 << 30, // 1GB
 		NumVersionsToKeep:   1,
 		CompactionL0Trigger: 10,
+		EnableVersioning:    false,
+		MaxVersions:         10,
 	}
 }
 
@@ -157,10 +165,12 @@ type DB struct {
 
 // Entry represents a value stored in the database
 type Entry struct {
-	Type    DataType
-	Value   interface{}
-	Version uint64
-	Created time.Time
+	Type        DataType
+	Value       interface{}
+	Version     uint64
+	Created     time.Time
+	LastUpdated time.Time
+	Versions    []VersionedEntry `json:",omitempty"`
 }
 
 // DataFile represents the binary format of stored data
@@ -1178,6 +1188,15 @@ func (it *Iterator) Seek(key string) {
 			}
 		}
 	}
+
+	// If no matching key found and we have keys, use first/last key
+	if it.curr == "" && len(matchingKeys) > 0 {
+		if it.reverse {
+			it.curr = matchingKeys[0]
+		} else {
+			it.curr = matchingKeys[0]
+		}
+	}
 }
 
 func (it *Iterator) Valid() bool {
@@ -1198,29 +1217,36 @@ func (it *Iterator) Next() {
 	it.db.mutex.RLock()
 	defer it.db.mutex.RUnlock()
 
-	current := it.curr
-	it.curr = ""
-
-	var matchingKeys []string
+	// Get all keys
+	var keys []string
 	for k := range it.db.data {
 		if bytes.HasPrefix([]byte(k), it.prefix) {
-			matchingKeys = append(matchingKeys, k)
+			keys = append(keys, k)
 		}
 	}
 
+	// Sort keys based on direction
 	if it.reverse {
-		sort.Sort(sort.Reverse(sort.StringSlice(matchingKeys)))
+		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
 	} else {
-		sort.Strings(matchingKeys)
+		sort.Strings(keys)
 	}
 
 	// Find next key
-	for i, k := range matchingKeys {
-		if k == current && i+1 < len(matchingKeys) {
-			it.curr = matchingKeys[i+1]
-			break
+	if it.curr == "" {
+		if len(keys) > 0 {
+			it.curr = keys[0]
+		}
+		return
+	}
+
+	for i, k := range keys {
+		if k == it.curr && i+1 < len(keys) {
+			it.curr = keys[i+1]
+			return
 		}
 	}
+	it.curr = ""
 }
 
 func (it *Iterator) Item() *Entry {
@@ -1244,30 +1270,76 @@ func (it *Iterator) Item() *Entry {
 	return nil
 }
 
-// ExportToJSON exports the database content to a human-readable JSON file
-func (db *DB) ExportToJSON(filename string) error {
+// ExportToJSON exports the database content as a JSON string
+func (db *DB) ExportToJSON() (string, error) {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
-	// Create a map to store formatted data
-	exportData := make(map[string]map[string]interface{})
-
-	// Format each entry
+	exportData := make(map[string]interface{})
 	for key, entry := range db.data {
-		entryData := map[string]interface{}{
-			"type":    formatDataType(entry.Type),
-			"version": entry.Version,
-			"created": entry.Created,
-		}
+		var value interface{}
 
 		// Format value based on type
 		switch entry.Type {
 		case String:
-			entryData["value"] = entry.Value.(string)
+			if !db.options.EnableVersioning {
+				value = entry.Value.(string)
+			} else {
+				value = formatVersionedEntry(entry)
+			}
+
 		case List:
-			entryData["value"] = entry.Value.([]string)
+			if !db.options.EnableVersioning {
+				value = entry.Value.([]string)
+			} else {
+				listValue := map[string]interface{}{
+					"type":         entry.Type,
+					"value":        entry.Value.([]string),
+					"version":      entry.Version,
+					"created":      entry.Created,
+					"last_updated": entry.LastUpdated,
+				}
+				if len(entry.Versions) > 0 {
+					versions := make([]map[string]interface{}, len(entry.Versions))
+					for i, v := range entry.Versions {
+						versions[i] = map[string]interface{}{
+							"value":        v.Value.([]string),
+							"version":      v.Version,
+							"created":      v.Created,
+							"last_updated": v.LastUpdated,
+						}
+					}
+					listValue["versions"] = versions
+				}
+				value = listValue
+			}
+
 		case Hash:
-			entryData["value"] = entry.Value.(map[string]string)
+			if !db.options.EnableVersioning {
+				value = entry.Value.(map[string]string)
+			} else {
+				hashValue := map[string]interface{}{
+					"type":         entry.Type,
+					"value":        entry.Value.(map[string]string),
+					"version":      entry.Version,
+					"created":      entry.Created,
+					"last_updated": entry.LastUpdated,
+				}
+				if len(entry.Versions) > 0 {
+					versions := make([]map[string]interface{}, len(entry.Versions))
+					for i, v := range entry.Versions {
+						versions[i] = map[string]interface{}{
+							"value":        v.Value.(map[string]string),
+							"version":      v.Version,
+							"created":      v.Created,
+							"last_updated": v.LastUpdated,
+						}
+					}
+					hashValue["versions"] = versions
+				}
+				value = hashValue
+			}
+
 		case Set:
 			set := entry.Value.(map[string]struct{})
 			members := make([]string, 0, len(set))
@@ -1275,42 +1347,305 @@ func (db *DB) ExportToJSON(filename string) error {
 				members = append(members, member)
 			}
 			sort.Strings(members)
-			entryData["value"] = members
+
+			if !db.options.EnableVersioning {
+				value = members
+			} else {
+				setValue := map[string]interface{}{
+					"type":         entry.Type,
+					"value":        members,
+					"version":      entry.Version,
+					"created":      entry.Created,
+					"last_updated": entry.LastUpdated,
+				}
+				if len(entry.Versions) > 0 {
+					versions := make([]map[string]interface{}, len(entry.Versions))
+					for i, v := range entry.Versions {
+						vset := v.Value.(map[string]struct{})
+						vmembers := make([]string, 0, len(vset))
+						for member := range vset {
+							vmembers = append(vmembers, member)
+						}
+						sort.Strings(vmembers)
+						versions[i] = map[string]interface{}{
+							"value":        vmembers,
+							"version":      v.Version,
+							"created":      v.Created,
+							"last_updated": v.LastUpdated,
+						}
+					}
+					setValue["versions"] = versions
+				}
+				value = setValue
+			}
+
 		case ZSet:
-			entryData["value"] = entry.Value.([]ZSetMember)
+			if !db.options.EnableVersioning {
+				value = entry.Value.([]ZSetMember)
+			} else {
+				zsetValue := map[string]interface{}{
+					"type":         entry.Type,
+					"value":        entry.Value.([]ZSetMember),
+					"version":      entry.Version,
+					"created":      entry.Created,
+					"last_updated": entry.LastUpdated,
+				}
+				if len(entry.Versions) > 0 {
+					versions := make([]map[string]interface{}, len(entry.Versions))
+					for i, v := range entry.Versions {
+						versions[i] = map[string]interface{}{
+							"value":        v.Value.([]ZSetMember),
+							"version":      v.Version,
+							"created":      v.Created,
+							"last_updated": v.LastUpdated,
+						}
+					}
+					zsetValue["versions"] = versions
+				}
+				value = zsetValue
+			}
 		}
 
-		exportData[key] = entryData
+		exportData[key] = value
 	}
 
-	// Marshal with indentation for readability
 	data, err := json.MarshalIndent(exportData, "", "    ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal data: %w", err)
+		return "", fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	// Write to file
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		return fmt.Errorf("failed to write JSON file: %w", err)
+	return string(data), nil
+}
+
+// Helper function to format versioned string entries
+func formatVersionedEntry(entry Entry) map[string]interface{} {
+	value := map[string]interface{}{
+		"type":         entry.Type,
+		"value":        entry.Value,
+		"version":      entry.Version,
+		"created":      entry.Created,
+		"last_updated": entry.LastUpdated,
 	}
 
+	if len(entry.Versions) > 0 {
+		versions := make([]map[string]interface{}, len(entry.Versions))
+		for i, v := range entry.Versions {
+			versions[i] = map[string]interface{}{
+				"value":        v.Value,
+				"version":      v.Version,
+				"created":      v.Created,
+				"last_updated": v.LastUpdated,
+			}
+		}
+		value["versions"] = versions
+	}
+
+	return value
+}
+
+// VersionedEntry represents a versioned value
+type VersionedEntry struct {
+	Value       interface{}
+	Version     uint64
+	Created     time.Time
+	LastUpdated time.Time
+}
+
+// WithVersioning enables version control
+func WithVersioning(enable bool) Option {
+	return func(o *Options) {
+		o.EnableVersioning = enable
+	}
+}
+
+// WithMaxVersions sets maximum versions per key
+func WithMaxVersions(max int) Option {
+	return func(o *Options) {
+		o.MaxVersions = max
+	}
+}
+
+// StringOp operations with time tracking
+func (op *StringOp) SetWithVersion(value string) error {
+	op.db.mutex.Lock()
+	defer op.db.mutex.Unlock()
+
+	now := time.Now()
+	newVersion := op.db.txCounter + 1
+
+	var versions []VersionedEntry
+	if existing, ok := op.db.data[op.key]; ok && op.db.options.EnableVersioning {
+		// Add current value to version history
+		versions = append(existing.Versions, VersionedEntry{
+			Value:       existing.Value,
+			Version:     existing.Version,
+			Created:     existing.Created,
+			LastUpdated: existing.LastUpdated,
+		})
+
+		// Enforce version limit
+		if op.db.options.MaxVersions > 0 && len(versions) > op.db.options.MaxVersions-1 {
+			versions = versions[len(versions)-(op.db.options.MaxVersions-1):]
+		}
+	}
+
+	entry := Entry{
+		Type:        String,
+		Value:       value,
+		Version:     newVersion,
+		Created:     now,
+		LastUpdated: now,
+		Versions:    versions,
+	}
+
+	op.db.data[op.key] = entry
+	op.db.txCounter++
+	return op.db.writeData()
+}
+
+// GetVersion retrieves a specific version of a string value
+func (op *StringOp) GetVersion(version uint64) (string, bool) {
+	op.db.mutex.RLock()
+	defer op.db.mutex.RUnlock()
+
+	if entry, ok := op.db.data[op.key]; ok && entry.Type == String {
+		// Return current version if it matches
+		if entry.Version == version {
+			return entry.Value.(string), true
+		}
+
+		// Search in version history
+		for _, v := range entry.Versions {
+			if v.Version == version {
+				return v.Value.(string), true
+			}
+		}
+	}
+	return "", false
+}
+
+// ListVersions returns all available versions for a key
+func (op *StringOp) ListVersions() []uint64 {
+	op.db.mutex.RLock()
+	defer op.db.mutex.RUnlock()
+
+	if entry, ok := op.db.data[op.key]; ok && entry.Type == String {
+		versions := make([]uint64, 0, len(entry.Versions)+1)
+		versions = append(versions, entry.Version)
+
+		for _, v := range entry.Versions {
+			versions = append(versions, v.Version)
+		}
+
+		// Sort versions in descending order
+		sort.Slice(versions, func(i, j int) bool {
+			return versions[i] > versions[j]
+		})
+
+		return versions
+	}
 	return nil
 }
 
-// formatDataType converts DataType to string representation
-func formatDataType(dt DataType) string {
-	switch dt {
-	case String:
-		return "string"
-	case List:
-		return "list"
-	case Hash:
-		return "hash"
-	case Set:
-		return "set"
-	case ZSet:
-		return "zset"
-	default:
-		return "unknown"
+// Transaction implementation
+type Transaction struct {
+	db       *DB
+	readOnly bool
+	writes   map[string]Entry
+	reads    map[string]Entry
+	mutex    sync.RWMutex
+	started  time.Time
+}
+
+func (txn *Transaction) Get(key string) (Entry, error) {
+	txn.mutex.RLock()
+	defer txn.mutex.RUnlock()
+
+	// First check writes
+	if entry, ok := txn.writes[key]; ok {
+		return entry, nil
 	}
+
+	// Then check reads
+	if entry, ok := txn.reads[key]; ok {
+		return entry, nil
+	}
+
+	// Finally check database
+	txn.db.mutex.RLock()
+	defer txn.db.mutex.RUnlock()
+
+	if entry, ok := txn.db.data[key]; ok {
+		// Store in reads for consistency
+		txn.reads[key] = entry
+		return entry, nil
+	}
+
+	return Entry{}, ErrKeyNotFound
+}
+
+func (txn *Transaction) Set(key string, entry Entry) error {
+	if txn.readOnly {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	txn.mutex.Lock()
+	defer txn.mutex.Unlock()
+
+	// Store in writes
+	txn.writes[key] = entry
+	return nil
+}
+
+func (txn *Transaction) Commit() error {
+	if txn.readOnly {
+		return nil
+	}
+
+	txn.db.txMutex.Lock()
+	defer txn.db.txMutex.Unlock()
+
+	// Check for conflicts
+	for key := range txn.writes {
+		if currentEntry, ok := txn.db.data[key]; ok {
+			if readEntry, wasRead := txn.reads[key]; wasRead {
+				// Check if the entry was modified after our read
+				if currentEntry.Version != readEntry.Version {
+					return fmt.Errorf("transaction conflict: key %s has been modified", key)
+				}
+			}
+		}
+	}
+
+	// Apply all writes
+	now := time.Now()
+	for key, entry := range txn.writes {
+		entry.Version = txn.db.txCounter + 1
+		entry.LastUpdated = now
+		if entry.Created.IsZero() {
+			entry.Created = now
+		}
+		txn.db.data[key] = entry
+	}
+
+	txn.db.txCounter++
+	return nil
+}
+
+// Concurrent write control
+func (db *DB) writeWithLock(key string, entry Entry) error {
+	db.txMutex.Lock()
+	defer db.txMutex.Unlock()
+
+	// Update version and timestamps
+	entry.Version = db.txCounter + 1
+	now := time.Now()
+	if entry.Created.IsZero() {
+		entry.Created = now
+	}
+	entry.LastUpdated = now
+
+	db.data[key] = entry
+	db.txCounter++
+	return nil
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -702,19 +701,177 @@ func TestDB_ExportToJSON(t *testing.T) {
 	require.NoError(t, err)
 
 	// Export to JSON
-	exportPath := filepath.Join(t.TempDir(), "export.json")
-	err = db.ExportToJSON(exportPath)
+	jsonData, err := db.ExportToJSON()
 	require.NoError(t, err)
 
-	// Read and verify JSON content
-	data, err := os.ReadFile(exportPath)
-	require.NoError(t, err)
-
-	var exportedData map[string]map[string]interface{}
-	err = json.Unmarshal(data, &exportedData)
+	// Parse and verify JSON content
+	var exportedData map[string]interface{}
+	err = json.Unmarshal([]byte(jsonData), &exportedData)
 	require.NoError(t, err)
 
 	// Verify exported data
-	assert.Equal(t, "string", exportedData["str1"]["type"])
-	assert.Equal(t, "value1", exportedData["str1"]["value"])
+	assert.Equal(t, "value1", exportedData["str1"])
+
+	// Verify list
+	listData, ok := exportedData["list1"].([]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, []interface{}{"item1", "item2"}, listData)
+
+	// Verify hash
+	hashData, ok := exportedData["hash1"].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "value1", hashData["field1"])
+
+	// Verify set
+	setData, ok := exportedData["set1"].([]interface{})
+	assert.True(t, ok)
+	assert.ElementsMatch(t, []interface{}{"member1", "member2"}, setData)
+
+	// Verify zset
+	zsetData, ok := exportedData["zset1"].([]interface{})
+	assert.True(t, ok)
+	assert.Len(t, zsetData, 1)
+}
+
+func TestDB_Versioning(t *testing.T) {
+	// Create DB with versioning enabled
+	dir, err := os.MkdirTemp("", "xedb-version-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+
+	db, err := xedb.New(
+		xedb.WithDataDir(dir),
+		xedb.WithVersioning(true),
+		xedb.WithMaxVersions(3), // Keep last 3 versions
+	)
+	require.NoError(t, err)
+	defer db.Close()
+
+	t.Run("Version History", func(t *testing.T) {
+		// Set multiple versions of a key
+		err := db.String("key1").SetWithVersion("value1")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond) // Ensure different timestamps
+
+		err = db.String("key1").SetWithVersion("value2")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+
+		err = db.String("key1").SetWithVersion("value3")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+
+		err = db.String("key1").SetWithVersion("value4")
+		require.NoError(t, err)
+
+		// Get current value
+		val, exists := db.String("key1").Get()
+		assert.True(t, exists)
+		assert.Equal(t, "value4", val)
+
+		// List versions
+		versions := db.String("key1").ListVersions()
+		assert.Len(t, versions, 3) // Should keep only last 3 versions due to MaxVersions setting
+
+		// Get specific versions
+		val, exists = db.String("key1").GetVersion(versions[0])
+		assert.True(t, exists)
+		assert.Equal(t, "value4", val)
+
+		val, exists = db.String("key1").GetVersion(versions[1])
+		assert.True(t, exists)
+		assert.Equal(t, "value3", val)
+
+		val, exists = db.String("key1").GetVersion(versions[2])
+		assert.True(t, exists)
+		assert.Equal(t, "value2", val)
+
+		// Try to get non-existent version
+		val, exists = db.String("key1").GetVersion(999)
+		assert.False(t, exists)
+		assert.Empty(t, val)
+	})
+
+	t.Run("Export JSON with Versions", func(t *testing.T) {
+		// Set value with versions
+		err := db.String("key2").SetWithVersion("v1")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+
+		err = db.String("key2").SetWithVersion("v2")
+		require.NoError(t, err)
+
+		// Export to JSON
+		jsonData, err := db.ExportToJSON()
+		require.NoError(t, err)
+
+		// Parse JSON
+		var data map[string]interface{}
+		err = json.Unmarshal([]byte(jsonData), &data)
+		require.NoError(t, err)
+
+		// Verify key2 entry
+		entry, ok := data["key2"].(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, "v2", entry["value"])
+		assert.NotNil(t, entry["created"])
+		assert.NotNil(t, entry["last_updated"])
+
+		// Verify versions
+		versions, ok := entry["versions"].([]interface{})
+		assert.True(t, ok)
+		assert.Len(t, versions, 1)
+
+		version := versions[0].(map[string]interface{})
+		assert.Equal(t, "v1", version["value"])
+		assert.NotNil(t, version["created"])
+		assert.NotNil(t, version["last_updated"])
+	})
+
+	t.Run("Version Limit", func(t *testing.T) {
+		// Create DB with version limit
+		db, err := xedb.New(
+			xedb.WithDataDir(dir),
+			xedb.WithVersioning(true),
+			xedb.WithMaxVersions(2),
+		)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Set more versions than limit
+		err = db.String("key3").SetWithVersion("v1")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+
+		err = db.String("key3").SetWithVersion("v2")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+
+		err = db.String("key3").SetWithVersion("v3")
+		require.NoError(t, err)
+
+		// Check versions
+		versions := db.String("key3").ListVersions()
+		assert.Len(t, versions, 2) // Should only keep 2 versions
+	})
+
+	t.Run("Versioning Disabled", func(t *testing.T) {
+		// Create DB with versioning disabled
+		db, err := xedb.New(
+			xedb.WithDataDir(dir),
+			xedb.WithVersioning(false),
+		)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Set multiple values
+		err = db.String("key4").SetWithVersion("v1")
+		require.NoError(t, err)
+		err = db.String("key4").SetWithVersion("v2")
+		require.NoError(t, err)
+
+		// Check versions
+		versions := db.String("key4").ListVersions()
+		assert.Len(t, versions, 1) // Should only keep current version
+	})
 }

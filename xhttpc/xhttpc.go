@@ -1381,8 +1381,26 @@ const (
 	ContentTypeOctetStream   = "application/octet-stream"
 	ContentTypeHTML          = "text/html"
 
+	// Content type constants with charset
+	ContentTypeJSONUTF8      = "application/json; charset=utf-8"
+	ContentTypeXMLUTF8       = "application/xml; charset=utf-8"
+	ContentTypeFormUTF8      = "application/x-www-form-urlencoded; charset=utf-8"
+	ContentTypeTextPlainUTF8 = "text/plain; charset=utf-8"
+	ContentTypeHTMLUTF8      = "text/html; charset=utf-8"
+
+	// Additional charsets
+	ContentTypeJSONGBK      = "application/json; charset=gbk"
+	ContentTypeXMLGBK       = "application/xml; charset=gbk"
+	ContentTypeTextPlainGBK = "text/plain; charset=gbk"
+	ContentTypeHTMLGBK      = "text/html; charset=gbk"
+
+	ContentTypeJSONGB2312      = "application/json; charset=gb2312"
+	ContentTypeXMLGB2312       = "application/xml; charset=gb2312"
+	ContentTypeTextPlainGB2312 = "text/plain; charset=gb2312"
+	ContentTypeHTMLGB2312      = "text/html; charset=gb2312"
+
 	// Default content type
-	DefaultContentType = ContentTypeJSON
+	DefaultContentType = ContentTypeJSONUTF8
 )
 
 // Get sends a GET request with specified content type
@@ -1431,15 +1449,32 @@ func (r *Request) Delete(ctx context.Context, contentType, url string) *Request 
 }
 
 // Execute sends the request
-func (r *Request) Execute(ctx context.Context, method, url string) *Request {
+func (r *Request) Execute(ctx context.Context, method, requestURL string) *Request {
 	if r.err != nil {
 		return r
 	}
 
-	fullURL := url
-	if !isAbsoluteURL(url) && r.client.baseURL != "" {
-		fullURL = r.client.baseURL + url
+	fullURL := requestURL
+	if !isAbsoluteURL(requestURL) && r.client.baseURL != "" {
+		fullURL = r.client.baseURL + requestURL
 	}
+
+	// Parse the URL and merge query parameters
+	parsedURL, err := url.Parse(fullURL)
+	if err != nil {
+		r.err = xerror.Wrap(err, "failed to parse URL")
+		return r
+	}
+
+	// Merge existing query parameters from the Request with the URL's query parameters
+	mergedQuery := parsedURL.Query()
+	for k, v := range r.httpRequest.URL.Query() {
+		for _, value := range v {
+			mergedQuery.Add(k, value)
+		}
+	}
+	parsedURL.RawQuery = mergedQuery.Encode()
+	fullURL = parsedURL.String()
 
 	req, err := r.client.createRequest(ctx, method, fullURL, r.httpRequest.Body)
 	if err != nil {
@@ -1453,9 +1488,6 @@ func (r *Request) Execute(ctx context.Context, method, url string) *Request {
 			req.Header.Add(key, value)
 		}
 	}
-
-	// Copy query parameters from r.httpRequest to req
-	req.URL.RawQuery = r.httpRequest.URL.RawQuery
 
 	r.httpRequest = req
 	r.response, r.err = r.client.doRequest(req)
