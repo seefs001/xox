@@ -1455,18 +1455,21 @@ func (op *StringOp) SetWithVersion(value string) error {
 	newVersion := op.db.txCounter + 1
 
 	var versions []VersionedEntry
-	if existing, ok := op.db.data[op.key]; ok && op.db.options.EnableVersioning {
+	if existing, ok := op.db.data[op.key]; ok {
 		// Add current value to version history
-		versions = append(existing.Versions, VersionedEntry{
+		versions = append(versions, VersionedEntry{
 			Value:       existing.Value,
 			Version:     existing.Version,
 			Created:     existing.Created,
 			LastUpdated: existing.LastUpdated,
 		})
 
-		// Enforce version limit
-		if op.db.options.MaxVersions > 0 && len(versions) > op.db.options.MaxVersions-1 {
-			versions = versions[len(versions)-(op.db.options.MaxVersions-1):]
+		// Add existing versions
+		versions = append(versions, existing.Versions...)
+
+		// Enforce version limit if MaxVersions > 0
+		if op.db.options.MaxVersions > 0 && len(versions) > op.db.options.MaxVersions {
+			versions = versions[:op.db.options.MaxVersions]
 		}
 	}
 
