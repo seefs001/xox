@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/url"
 	"os"
@@ -2439,4 +2440,597 @@ func ForEachMapWithError[K comparable, V any](m map[K]V, action func(K, V) error
 		}
 	}
 	return nil
+}
+
+// IsBlank checks if a string is empty or contains only whitespace characters.
+//
+// Parameters:
+// - s: The string to check.
+//
+// Returns:
+// true if the string is empty or contains only whitespace characters, false otherwise.
+//
+// Example:
+//
+//	fmt.Println(IsBlank(""))        // true
+//	fmt.Println(IsBlank(" "))       // true
+//	fmt.Println(IsBlank("\t\n"))    // true
+//	fmt.Println(IsBlank("hello"))   // false
+//	fmt.Println(IsBlank(" hello ")) // false
+func IsBlank(s string) bool {
+	return len(strings.TrimSpace(s)) == 0
+}
+
+// RetryInfo contains information about the current retry attempt
+type RetryInfo struct {
+	// Attempt is the current attempt number (1-based)
+	Attempt int
+	// MaxAttempts is the maximum number of attempts that will be made
+	MaxAttempts int
+	// Delay is the delay before this attempt
+	Delay time.Duration
+	// StartTime is when the first attempt was made
+	StartTime time.Time
+	// LastError is the error from the previous attempt
+	LastError error
+}
+
+// RetryOption is a function type for configuring retry behavior
+type RetryOption func(*retryConfig)
+
+type retryConfig struct {
+	maxAttempts  int
+	initialDelay time.Duration
+	maxDelay     time.Duration
+	delayType    string // "fixed", "exponential", "linear"
+	multiplier   float64
+	maxJitter    time.Duration
+	retryIf      func(error) bool
+	onRetry      func(RetryInfo)
+	ctx          context.Context
+}
+
+// WithMaxAttempts sets the maximum number of retry attempts
+func WithMaxAttempts(attempts int) RetryOption {
+	return func(c *retryConfig) {
+		c.maxAttempts = attempts
+	}
+}
+
+// WithDelay sets the delay between retries
+func WithDelay(delay time.Duration) RetryOption {
+	return func(c *retryConfig) {
+		c.initialDelay = delay
+	}
+}
+
+// WithMaxDelay sets the maximum delay between retries
+func WithMaxDelay(maxDelay time.Duration) RetryOption {
+	return func(c *retryConfig) {
+		c.maxDelay = maxDelay
+	}
+}
+
+// WithExponentialBackoff sets exponential backoff with a multiplier
+func WithExponentialBackoff(multiplier float64) RetryOption {
+	return func(c *retryConfig) {
+		c.delayType = "exponential"
+		c.multiplier = multiplier
+	}
+}
+
+// WithLinearBackoff sets linear backoff with an increment
+func WithLinearBackoff(increment time.Duration) RetryOption {
+	return func(c *retryConfig) {
+		c.delayType = "linear"
+		c.multiplier = float64(increment)
+	}
+}
+
+// WithJitter adds random jitter to the delay up to the specified duration
+func WithJitter(maxJitter time.Duration) RetryOption {
+	return func(c *retryConfig) {
+		c.maxJitter = maxJitter
+	}
+}
+
+// WithRetryIf sets a function to determine if a retry should be attempted based on the error
+func WithRetryIf(retryIf func(error) bool) RetryOption {
+	return func(c *retryConfig) {
+		c.retryIf = retryIf
+	}
+}
+
+// WithOnRetry sets a function to be called before each retry attempt
+func WithOnRetry(onRetry func(RetryInfo)) RetryOption {
+	return func(c *retryConfig) {
+		c.onRetry = onRetry
+	}
+}
+
+// WithContext sets a context for cancellation
+func WithContext(ctx context.Context) RetryOption {
+	return func(c *retryConfig) {
+		c.ctx = ctx
+	}
+}
+
+// Retry executes the given function with retries based on the provided options
+//
+// Parameters:
+// - f: The function to retry
+// - options: Optional RetryOption functions to configure retry behavior
+//
+// Returns:
+// - error: The last error encountered, or nil if successful
+//
+// Example:
+//
+//	err := Retry(func(info RetryInfo) error {
+//	    // Your code here
+//	    return someOperation()
+//	},
+//	    WithMaxAttempts(3),
+//	    WithDelay(time.Second),
+//	    WithExponentialBackoff(2),
+//	    WithJitter(100*time.Millisecond),
+//	    WithOnRetry(func(info RetryInfo) {
+//	        log.Printf("Retry %d/%d after %v", info.Attempt, info.MaxAttempts, info.Delay)
+//	    }),
+//	)
+func Retry(f func(RetryInfo) error, options ...RetryOption) error {
+	config := &retryConfig{
+		maxAttempts:  3,
+		initialDelay: time.Second,
+		maxDelay:     15 * time.Second,
+		delayType:    "fixed",
+		multiplier:   2.0,
+		retryIf:      func(err error) bool { return err != nil },
+		onRetry:      func(RetryInfo) {},
+		ctx:          context.Background(),
+	}
+
+	for _, option := range options {
+		option(config)
+	}
+
+	var lastErr error
+	startTime := time.Now()
+
+	for attempt := 1; attempt <= config.maxAttempts; attempt++ {
+		info := RetryInfo{
+			Attempt:     attempt,
+			MaxAttempts: config.maxAttempts,
+			StartTime:   startTime,
+			LastError:   lastErr,
+		}
+
+		// Calculate delay for next attempt
+		if attempt > 1 {
+			delay := config.initialDelay
+			switch config.delayType {
+			case "exponential":
+				delay = time.Duration(float64(config.initialDelay) * math.Pow(config.multiplier, float64(attempt-2)))
+			case "linear":
+				delay = config.initialDelay + time.Duration(config.multiplier*float64(attempt-2))
+			}
+
+			// Apply max delay
+			if config.maxDelay > 0 && delay > config.maxDelay {
+				delay = config.maxDelay
+			}
+
+			// Apply jitter
+			if config.maxJitter > 0 {
+				jitter := time.Duration(rand.Int63n(int64(config.maxJitter)))
+				delay += jitter
+			}
+
+			info.Delay = delay
+
+			// Call onRetry callback
+			config.onRetry(info)
+
+			// Wait for delay or context cancellation
+			select {
+			case <-config.ctx.Done():
+				return xerror.Wrap(config.ctx.Err(), "retry cancelled by context")
+			case <-time.After(delay):
+			}
+		}
+
+		// Execute the function
+		err := f(info)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		if !config.retryIf(err) {
+			return xerror.Wrap(err, "retry stopped by retryIf condition")
+		}
+
+		// Check if this was the last attempt
+		if attempt == config.maxAttempts {
+			return xerror.Wrapf(err, "retry failed after %d attempts", attempt)
+		}
+
+		// Check context before continuing
+		if config.ctx.Err() != nil {
+			return xerror.Wrap(config.ctx.Err(), "retry cancelled by context")
+		}
+	}
+
+	return lastErr
+}
+
+// RetryWithResult executes the given function with retries based on the provided options and returns a result
+//
+// Parameters:
+// - f: The function to retry that returns a result and an error
+// - options: Optional RetryOption functions to configure retry behavior
+//
+// Returns:
+// - T: The result from the successful execution
+// - error: The last error encountered, or nil if successful
+//
+// Example:
+//
+//	result, err := RetryWithResult(func(info RetryInfo) (string, error) {
+//	    // Your code here that returns a result
+//	    return someOperationWithResult()
+//	},
+//	    WithMaxAttempts(3),
+//	    WithDelay(time.Second),
+//	    WithExponentialBackoff(2),
+//	    WithJitter(100*time.Millisecond),
+//	    WithOnRetry(func(info RetryInfo) {
+//	        log.Printf("Retry %d/%d after %v", info.Attempt, info.MaxAttempts, info.Delay)
+//	    }),
+//	)
+//	if err != nil {
+//	    // handle error
+//	}
+//	fmt.Printf("Result: %v\n", result)
+func RetryWithResult[T any](f func(RetryInfo) (T, error), options ...RetryOption) (T, error) {
+	config := &retryConfig{
+		maxAttempts:  3,
+		initialDelay: time.Second,
+		maxDelay:     15 * time.Second,
+		delayType:    "fixed",
+		multiplier:   2.0,
+		retryIf:      func(err error) bool { return err != nil },
+		onRetry:      func(RetryInfo) {},
+		ctx:          context.Background(),
+	}
+
+	for _, option := range options {
+		option(config)
+	}
+
+	var lastErr error
+	var result T
+	startTime := time.Now()
+
+	for attempt := 1; attempt <= config.maxAttempts; attempt++ {
+		info := RetryInfo{
+			Attempt:     attempt,
+			MaxAttempts: config.maxAttempts,
+			StartTime:   startTime,
+			LastError:   lastErr,
+		}
+
+		// Calculate delay for next attempt
+		if attempt > 1 {
+			delay := config.initialDelay
+			switch config.delayType {
+			case "exponential":
+				delay = time.Duration(float64(config.initialDelay) * math.Pow(config.multiplier, float64(attempt-2)))
+			case "linear":
+				delay = config.initialDelay + time.Duration(config.multiplier*float64(attempt-2))
+			}
+
+			// Apply max delay
+			if config.maxDelay > 0 && delay > config.maxDelay {
+				delay = config.maxDelay
+			}
+
+			// Apply jitter
+			if config.maxJitter > 0 {
+				jitter := time.Duration(rand.Int63n(int64(config.maxJitter)))
+				delay += jitter
+			}
+
+			info.Delay = delay
+
+			// Call onRetry callback
+			config.onRetry(info)
+
+			// Wait for delay or context cancellation
+			select {
+			case <-config.ctx.Done():
+				return result, xerror.Wrap(config.ctx.Err(), "retry cancelled by context")
+			case <-time.After(delay):
+			}
+		}
+
+		// Execute the function
+		var err error
+		result, err = f(info)
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+		if !config.retryIf(err) {
+			return result, xerror.Wrap(err, "retry stopped by retryIf condition")
+		}
+
+		// Check if this was the last attempt
+		if attempt == config.maxAttempts {
+			return result, xerror.Wrapf(err, "retry failed after %d attempts", attempt)
+		}
+
+		// Check context before continuing
+		if config.ctx.Err() != nil {
+			return result, xerror.Wrap(config.ctx.Err(), "retry cancelled by context")
+		}
+	}
+
+	return result, lastErr
+}
+
+// Intersection returns a new slice containing elements that appear in both slices.
+//
+// Example:
+//
+//	s1 := []int{1, 2, 3, 4}
+//	s2 := []int{3, 4, 5, 6}
+//	result := Intersection(s1, s2)
+//	fmt.Println(result) // Output: [3 4]
+func Intersection[T comparable](slice1, slice2 []T) []T {
+	if slice1 == nil || slice2 == nil {
+		return nil
+	}
+
+	set := make(map[T]struct{})
+	for _, item := range slice1 {
+		set[item] = struct{}{}
+	}
+
+	var result []T
+	for _, item := range slice2 {
+		if _, ok := set[item]; ok {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// Difference returns a new slice containing elements that appear in slice1 but not in slice2.
+//
+// Example:
+//
+//	s1 := []int{1, 2, 3, 4}
+//	s2 := []int{3, 4, 5, 6}
+//	result := Difference(s1, s2)
+//	fmt.Println(result) // Output: [1 2]
+func Difference[T comparable](slice1, slice2 []T) []T {
+	if slice1 == nil {
+		return nil
+	}
+	if slice2 == nil {
+		return slice1
+	}
+
+	set := make(map[T]struct{})
+	for _, item := range slice2 {
+		set[item] = struct{}{}
+	}
+
+	var result []T
+	for _, item := range slice1 {
+		if _, ok := set[item]; !ok {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// Union returns a new slice containing unique elements from both slices.
+//
+// Example:
+//
+//	s1 := []int{1, 2, 3, 4}
+//	s2 := []int{3, 4, 5, 6}
+//	result := Union(s1, s2)
+//	fmt.Println(result) // Output: [1 2 3 4 5 6]
+func Union[T comparable](slice1, slice2 []T) []T {
+	if slice1 == nil && slice2 == nil {
+		return nil
+	}
+
+	set := make(map[T]struct{})
+	var result []T
+
+	// Add elements from slice1
+	for _, item := range slice1 {
+		if _, ok := set[item]; !ok {
+			set[item] = struct{}{}
+			result = append(result, item)
+		}
+	}
+
+	// Add elements from slice2
+	for _, item := range slice2 {
+		if _, ok := set[item]; !ok {
+			set[item] = struct{}{}
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
+// FindIndex returns the index of the first element in the slice that satisfies the predicate.
+// Returns -1 if no element satisfies the predicate.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4, 5}
+//	index := FindIndex(numbers, func(n int) bool { return n > 3 })
+//	fmt.Println(index) // Output: 3 (index of 4)
+func FindIndex[T any](slice []T, predicate func(T) bool) int {
+	if slice == nil || predicate == nil {
+		return -1
+	}
+
+	for i, item := range slice {
+		if predicate(item) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Take returns a new slice containing the first n elements of the slice.
+// If n is greater than the length of the slice, returns the entire slice.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4, 5}
+//	result := Take(numbers, 3)
+//	fmt.Println(result) // Output: [1 2 3]
+func Take[T any](slice []T, n int) []T {
+	if slice == nil || n <= 0 {
+		return nil
+	}
+	if n >= len(slice) {
+		return slice
+	}
+	return slice[:n]
+}
+
+// Skip returns a new slice with the first n elements skipped.
+// If n is greater than the length of the slice, returns an empty slice.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4, 5}
+//	result := Skip(numbers, 2)
+//	fmt.Println(result) // Output: [3 4 5]
+func Skip[T any](slice []T, n int) []T {
+	if slice == nil || n < 0 {
+		return nil
+	}
+	if n >= len(slice) {
+		return []T{}
+	}
+	return slice[n:]
+}
+
+// DropRight returns a new slice with the last n elements removed.
+// If n is greater than the length of the slice, returns an empty slice.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4, 5}
+//	result := DropRight(numbers, 2)
+//	fmt.Println(result) // Output: [1 2 3]
+func DropRight[T any](slice []T, n int) []T {
+	if slice == nil || n < 0 {
+		return nil
+	}
+	if n >= len(slice) {
+		return []T{}
+	}
+	return slice[:len(slice)-n]
+}
+
+// PopFirst returns the first element and the rest of the slice.
+// If the slice is empty, returns the zero value and nil.
+// If the slice has only one element, returns that element and nil.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4}
+//	first, rest := PopFirst(numbers)
+//	fmt.Println(first, rest) // Output: 1 [2 3 4]
+func PopFirst[T any](slice []T) (T, []T) {
+	var zero T
+	if len(slice) == 0 {
+		return zero, nil
+	}
+	if len(slice) == 1 {
+		return slice[0], nil
+	}
+	return slice[0], slice[1:]
+}
+
+// PopLast returns the last element and the rest of the slice.
+// If the slice is empty, returns the zero value and nil.
+// If the slice has only one element, returns that element and nil.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4}
+//	last, rest := PopLast(numbers)
+//	fmt.Println(last, rest) // Output: 4 [1 2 3]
+func PopLast[T any](slice []T) (T, []T) {
+	var zero T
+	if len(slice) == 0 {
+		return zero, nil
+	}
+	if len(slice) == 1 {
+		return slice[0], nil
+	}
+	return slice[len(slice)-1], slice[:len(slice)-1]
+}
+
+// TakeRight returns a new slice containing the last n elements of the slice.
+// If n is greater than the length of the slice, returns the entire slice.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4, 5}
+//	result := TakeRight(numbers, 3)
+//	fmt.Println(result) // Output: [3 4 5]
+func TakeRight[T any](slice []T, n int) []T {
+	if slice == nil || n <= 0 {
+		return nil
+	}
+	if n >= len(slice) {
+		return slice
+	}
+	return slice[len(slice)-n:]
+}
+
+// Head returns a slice containing all elements except the last one.
+// Returns nil if the slice is empty or has only one element.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4}
+//	head := Head(numbers)
+//	fmt.Println(head) // Output: [1 2 3]
+func Head[T any](slice []T) []T {
+	if len(slice) <= 1 {
+		return nil
+	}
+	return slice[:len(slice)-1]
+}
+
+// Tail returns a slice containing all elements except the first one.
+// Returns nil if the slice is empty or has only one element.
+//
+// Example:
+//
+//	numbers := []int{1, 2, 3, 4}
+//	tail := Tail(numbers)
+//	fmt.Println(tail) // Output: [2 3 4]
+func Tail[T any](slice []T) []T {
+	if len(slice) <= 1 {
+		return nil
+	}
+	return slice[1:]
 }

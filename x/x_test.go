@@ -2055,3 +2055,527 @@ func TestForEachMapWithError(t *testing.T) {
 		assert.Equal(t, []string{"Alice"}, names)
 	})
 }
+
+func TestIsBlank(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: true,
+		},
+		{
+			name:     "Single space",
+			input:    " ",
+			expected: true,
+		},
+		{
+			name:     "Multiple spaces",
+			input:    "   ",
+			expected: true,
+		},
+		{
+			name:     "Tabs and newlines",
+			input:    "\t\n\r",
+			expected: true,
+		},
+		{
+			name:     "Mixed whitespace",
+			input:    " \t \n \r ",
+			expected: true,
+		},
+		{
+			name:     "Non-blank string",
+			input:    "hello",
+			expected: false,
+		},
+		{
+			name:     "String with spaces",
+			input:    " hello ",
+			expected: false,
+		},
+		{
+			name:     "String with tabs",
+			input:    "\thello\t",
+			expected: false,
+		},
+		{
+			name:     "Unicode whitespace",
+			input:    "\u2000\u2001\u2002",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := x.IsBlank(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRetry(t *testing.T) {
+	t.Run("Successful first attempt", func(t *testing.T) {
+		attempts := 0
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("Successful after retries", func(t *testing.T) {
+		attempts := 0
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			if attempts < 3 {
+				return errors.New("temporary error")
+			}
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 3, attempts)
+	})
+
+	t.Run("Max attempts exceeded", func(t *testing.T) {
+		attempts := 0
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			return errors.New("persistent error")
+		}, x.WithMaxAttempts(3))
+		assert.Error(t, err)
+		assert.Equal(t, 3, attempts)
+		assert.Contains(t, err.Error(), "retry failed after 3 attempts")
+	})
+
+	t.Run("Context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		attempts := 0
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			if attempts == 2 {
+				cancel()
+			}
+			return errors.New("error")
+		}, x.WithContext(ctx))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "context canceled")
+	})
+
+	t.Run("Exponential backoff", func(t *testing.T) {
+		attempts := 0
+		start := time.Now()
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			if attempts < 3 {
+				return errors.New("error")
+			}
+			return nil
+		},
+			x.WithDelay(100*time.Millisecond),
+			x.WithExponentialBackoff(2),
+			x.WithMaxAttempts(3))
+		duration := time.Since(start)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, attempts)
+		// First attempt immediate, second after 100ms, third after 200ms
+		assert.True(t, duration >= 300*time.Millisecond)
+	})
+
+	t.Run("RetryIf condition", func(t *testing.T) {
+		attempts := 0
+		err := x.Retry(func(info x.RetryInfo) error {
+			attempts++
+			return errors.New("stop retry")
+		}, x.WithRetryIf(func(err error) bool {
+			return err.Error() != "stop retry"
+		}))
+		assert.Error(t, err)
+		assert.Equal(t, 1, attempts)
+		assert.Contains(t, err.Error(), "retry stopped by retryIf condition")
+	})
+
+	t.Run("OnRetry callback", func(t *testing.T) {
+		var retryInfos []x.RetryInfo
+		err := x.Retry(func(info x.RetryInfo) error {
+			if info.Attempt < 3 {
+				return errors.New("error")
+			}
+			return nil
+		},
+			x.WithMaxAttempts(3),
+			x.WithOnRetry(func(info x.RetryInfo) {
+				retryInfos = append(retryInfos, info)
+			}))
+		assert.NoError(t, err)
+		assert.Len(t, retryInfos, 2) // Called before 2nd and 3rd attempts
+		assert.Equal(t, 2, retryInfos[0].Attempt)
+		assert.Equal(t, 3, retryInfos[1].Attempt)
+	})
+}
+
+func TestRetryWithResult(t *testing.T) {
+	t.Run("Successful first attempt", func(t *testing.T) {
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (string, error) {
+			attempts++
+			return "success", nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, "success", result)
+		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("Successful after retries", func(t *testing.T) {
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (string, error) {
+			attempts++
+			if attempts < 3 {
+				return "", errors.New("temporary error")
+			}
+			return "success", nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, "success", result)
+		assert.Equal(t, 3, attempts)
+	})
+
+	t.Run("Max attempts exceeded", func(t *testing.T) {
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (string, error) {
+			attempts++
+			return "failed", errors.New("persistent error")
+		}, x.WithMaxAttempts(3))
+		assert.Error(t, err)
+		assert.Equal(t, "failed", result)
+		assert.Equal(t, 3, attempts)
+		assert.Contains(t, err.Error(), "retry failed after 3 attempts")
+	})
+
+	t.Run("Context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (string, error) {
+			attempts++
+			if attempts == 2 {
+				cancel()
+			}
+			return "cancelled", errors.New("error")
+		}, x.WithContext(ctx))
+		assert.Error(t, err)
+		assert.Equal(t, "cancelled", result)
+		assert.Contains(t, err.Error(), "context canceled")
+	})
+
+	t.Run("Exponential backoff", func(t *testing.T) {
+		attempts := 0
+		start := time.Now()
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (int, error) {
+			attempts++
+			if attempts < 3 {
+				return 0, errors.New("error")
+			}
+			return 42, nil
+		},
+			x.WithDelay(100*time.Millisecond),
+			x.WithExponentialBackoff(2),
+			x.WithMaxAttempts(3))
+		duration := time.Since(start)
+		assert.NoError(t, err)
+		assert.Equal(t, 42, result)
+		assert.Equal(t, 3, attempts)
+		// First attempt immediate, second after 100ms, third after 200ms
+		assert.True(t, duration >= 300*time.Millisecond)
+	})
+
+	t.Run("RetryIf condition", func(t *testing.T) {
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (string, error) {
+			attempts++
+			return "stop", errors.New("stop retry")
+		}, x.WithRetryIf(func(err error) bool {
+			return err.Error() != "stop retry"
+		}))
+		assert.Error(t, err)
+		assert.Equal(t, "stop", result)
+		assert.Equal(t, 1, attempts)
+		assert.Contains(t, err.Error(), "retry stopped by retryIf condition")
+	})
+
+	t.Run("Complex result type", func(t *testing.T) {
+		type Response struct {
+			Code    int
+			Message string
+		}
+
+		attempts := 0
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (Response, error) {
+			attempts++
+			if attempts < 2 {
+				return Response{Code: 500, Message: "Server Error"}, errors.New("server error")
+			}
+			return Response{Code: 200, Message: "OK"}, nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, Response{Code: 200, Message: "OK"}, result)
+		assert.Equal(t, 2, attempts)
+	})
+
+	t.Run("With jitter", func(t *testing.T) {
+		attempts := 0
+		start := time.Now()
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (int, error) {
+			attempts++
+			if attempts < 3 {
+				return 0, errors.New("error")
+			}
+			return 42, nil
+		},
+			x.WithDelay(100*time.Millisecond),
+			x.WithJitter(50*time.Millisecond),
+			x.WithMaxAttempts(3))
+		duration := time.Since(start)
+		assert.NoError(t, err)
+		assert.Equal(t, 42, result)
+		assert.Equal(t, 3, attempts)
+		// With jitter, we can only verify that some delay occurred
+		assert.True(t, duration >= 200*time.Millisecond)
+	})
+
+	t.Run("With onRetry callback", func(t *testing.T) {
+		var retryInfos []x.RetryInfo
+		result, err := x.RetryWithResult(func(info x.RetryInfo) (int, error) {
+			if info.Attempt < 3 {
+				return 0, errors.New("error")
+			}
+			return 42, nil
+		},
+			x.WithMaxAttempts(3),
+			x.WithOnRetry(func(info x.RetryInfo) {
+				retryInfos = append(retryInfos, info)
+			}))
+		assert.NoError(t, err)
+		assert.Equal(t, 42, result)
+		assert.Equal(t, 2, len(retryInfos)) // Should have 2 retries
+		assert.Equal(t, 2, retryInfos[0].Attempt)
+		assert.Equal(t, 3, retryInfos[1].Attempt)
+	})
+}
+
+func TestTakeRight(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4, 5}
+		result := x.TakeRight(numbers, 3)
+		assert.Equal(t, []int{3, 4, 5}, result)
+	})
+
+	t.Run("Take more than length", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.TakeRight(numbers, 5)
+		assert.Equal(t, []int{1, 2, 3}, result)
+	})
+
+	t.Run("Take zero elements", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.TakeRight(numbers, 0)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Take negative elements", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.TakeRight(numbers, -1)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		result := x.TakeRight(numbers, 3)
+		assert.Nil(t, result)
+	})
+}
+
+func TestDropRight(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4, 5}
+		result := x.DropRight(numbers, 2)
+		assert.Equal(t, []int{1, 2, 3}, result)
+	})
+
+	t.Run("Drop more than length", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.DropRight(numbers, 5)
+		assert.Equal(t, []int{}, result)
+	})
+
+	t.Run("Drop zero elements", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.DropRight(numbers, 0)
+		assert.Equal(t, []int{1, 2, 3}, result)
+	})
+
+	t.Run("Drop negative elements", func(t *testing.T) {
+		numbers := []int{1, 2, 3}
+		result := x.DropRight(numbers, -1)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		result := x.DropRight(numbers, 3)
+		assert.Nil(t, result)
+	})
+}
+
+func TestPopFirst(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4}
+		first, rest := x.PopFirst(numbers)
+		assert.Equal(t, 1, first)
+		assert.Equal(t, []int{2, 3, 4}, rest)
+	})
+
+	t.Run("Single element", func(t *testing.T) {
+		numbers := []int{1}
+		first, rest := x.PopFirst(numbers)
+		assert.Equal(t, 1, first)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("Empty slice", func(t *testing.T) {
+		var numbers []int
+		first, rest := x.PopFirst(numbers)
+		assert.Zero(t, first)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		first, rest := x.PopFirst(numbers)
+		assert.Zero(t, first)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("String slice", func(t *testing.T) {
+		strings := []string{"first", "second", "third"}
+		first, rest := x.PopFirst(strings)
+		assert.Equal(t, "first", first)
+		assert.Equal(t, []string{"second", "third"}, rest)
+	})
+}
+
+func TestPopLast(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4}
+		last, rest := x.PopLast(numbers)
+		assert.Equal(t, 4, last)
+		assert.Equal(t, []int{1, 2, 3}, rest)
+	})
+
+	t.Run("Single element", func(t *testing.T) {
+		numbers := []int{1}
+		last, rest := x.PopLast(numbers)
+		assert.Equal(t, 1, last)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("Empty slice", func(t *testing.T) {
+		var numbers []int
+		last, rest := x.PopLast(numbers)
+		assert.Zero(t, last)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		last, rest := x.PopLast(numbers)
+		assert.Zero(t, last)
+		assert.Nil(t, rest)
+	})
+
+	t.Run("String slice", func(t *testing.T) {
+		strings := []string{"first", "second", "third"}
+		last, rest := x.PopLast(strings)
+		assert.Equal(t, "third", last)
+		assert.Equal(t, []string{"first", "second"}, rest)
+	})
+}
+
+func TestHead(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4}
+		result := x.Head(numbers)
+		assert.Equal(t, []int{1, 2, 3}, result)
+	})
+
+	t.Run("Two elements", func(t *testing.T) {
+		numbers := []int{1, 2}
+		result := x.Head(numbers)
+		assert.Equal(t, []int{1}, result)
+	})
+
+	t.Run("Single element", func(t *testing.T) {
+		numbers := []int{1}
+		result := x.Head(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Empty slice", func(t *testing.T) {
+		var numbers []int
+		result := x.Head(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		result := x.Head(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("String slice", func(t *testing.T) {
+		strings := []string{"first", "second", "third"}
+		result := x.Head(strings)
+		assert.Equal(t, []string{"first", "second"}, result)
+	})
+}
+
+func TestTail(t *testing.T) {
+	t.Run("Normal case", func(t *testing.T) {
+		numbers := []int{1, 2, 3, 4}
+		result := x.Tail(numbers)
+		assert.Equal(t, []int{2, 3, 4}, result)
+	})
+
+	t.Run("Two elements", func(t *testing.T) {
+		numbers := []int{1, 2}
+		result := x.Tail(numbers)
+		assert.Equal(t, []int{2}, result)
+	})
+
+	t.Run("Single element", func(t *testing.T) {
+		numbers := []int{1}
+		result := x.Tail(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Empty slice", func(t *testing.T) {
+		var numbers []int
+		result := x.Tail(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var numbers []int
+		result := x.Tail(numbers)
+		assert.Nil(t, result)
+	})
+
+	t.Run("String slice", func(t *testing.T) {
+		strings := []string{"first", "second", "third"}
+		result := x.Tail(strings)
+		assert.Equal(t, []string{"second", "third"}, result)
+	})
+}
