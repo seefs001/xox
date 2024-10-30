@@ -2807,34 +2807,153 @@ func Intersection[T comparable](slice1, slice2 []T) []T {
 	return result
 }
 
-// Difference returns a new slice containing elements that appear in slice1 but not in slice2.
+// Difference returns two slices containing elements that are unique to each input slice.
+// For nil input handling:
+// - If both slices are nil, returns (nil, nil)
+// - If slice1 is nil, returns (slice2, nil)
+// - If slice2 is nil, returns (slice1, nil)
+//
+// For non-nil slices, it returns:
+// - First return value: elements that appear in slice1 but not in slice2
+// - Second return value: elements that appear in slice2 but not in slice1
 //
 // Example:
 //
-//	s1 := []int{1, 2, 3, 4}
-//	s2 := []int{3, 4, 5, 6}
-//	result := Difference(s1, s2)
-//	fmt.Println(result) // Output: [1 2]
-func Difference[T comparable](slice1, slice2 []T) []T {
+//	slice1 := []int{1, 2, 3, 4}
+//	slice2 := []int{3, 4, 5, 6}
+//	left, right := Difference(slice1, slice2)
+//	fmt.Println(left)  // Output: [1 2]
+//	fmt.Println(right) // Output: [5 6]
+//
+//	// Nil handling examples:
+//	left, right = Difference[int](nil, nil)
+//	fmt.Println(left, right) // Output: nil nil
+//
+//	left, right = Difference([]int{1, 2}, nil)
+//	fmt.Println(left, right) // Output: [1 2] nil
+//
+//	left, right = Difference[int](nil, []int{1, 2})
+//	fmt.Println(left, right) // Output: [1 2] nil
+func Difference[T comparable](slice1, slice2 []T) ([]T, []T) {
+	// Case 1: both slices are nil
+	if slice1 == nil && slice2 == nil {
+		return nil, nil
+	}
+
+	// Case 2: slice1 is nil, return slice2 as left and nil as right
 	if slice1 == nil {
-		return nil
+		return slice2, nil
 	}
+
+	// Case 3: slice2 is nil, return slice1 as left and nil as right
 	if slice2 == nil {
-		return slice1
+		return slice1, nil
 	}
 
-	set := make(map[T]struct{})
-	for _, item := range slice2 {
-		set[item] = struct{}{}
-	}
+	set1 := make(map[T]struct{})
+	set2 := make(map[T]struct{})
 
-	var result []T
+	// Build sets for both slices
 	for _, item := range slice1 {
-		if _, ok := set[item]; !ok {
-			result = append(result, item)
+		set1[item] = struct{}{}
+	}
+	for _, item := range slice2 {
+		set2[item] = struct{}{}
+	}
+
+	// Find elements unique to slice1
+	var onlyInSlice1 []T
+	for _, item := range slice1 {
+		if _, ok := set2[item]; !ok {
+			onlyInSlice1 = append(onlyInSlice1, item)
 		}
 	}
-	return result
+
+	// Find elements unique to slice2
+	var onlyInSlice2 []T
+	for _, item := range slice2 {
+		if _, ok := set1[item]; !ok {
+			onlyInSlice2 = append(onlyInSlice2, item)
+		}
+	}
+
+	return onlyInSlice1, onlyInSlice2
+}
+
+// DifferenceBy returns two new slices containing elements that appear in one slice but not in the other,
+// based on a comparison function.
+//
+// Parameters:
+//   - slice1: The first slice to compare
+//   - slice2: The second slice to compare
+//   - compareFunc: A function that takes an element and returns a comparable value
+//     used for determining uniqueness
+//
+// Returns:
+// - []T: Elements that appear in slice1 but not in slice2
+// - []T: Elements that appear in slice2 but not in slice1
+//
+// Example:
+//
+//	type Person struct {
+//	    ID   int
+//	    Name string
+//	}
+//
+//	people1 := []Person{{1, "Alice"}, {2, "Bob"}, {3, "Charlie"}}
+//	people2 := []Person{{2, "Bob"}, {3, "Charlie"}, {4, "David"}}
+//
+//	left, right := DifferenceBy(people1, people2, func(p Person) int { return p.ID })
+//	fmt.Println(left)  // Output: [{1 Alice}]
+//	fmt.Println(right) // Output: [{4 David}]
+func DifferenceBy[T any, K comparable](slice1, slice2 []T, compareFunc func(T) K) ([]T, []T) {
+	if slice1 == nil && slice2 == nil {
+		return nil, nil
+	}
+	if slice1 == nil {
+		return nil, slice2
+	}
+	if slice2 == nil {
+		return slice1, nil
+	}
+
+	// Create maps to store comparison values
+	set1 := make(map[K]struct{})
+	set2 := make(map[K]struct{})
+	valueMap1 := make(map[K]T)
+	valueMap2 := make(map[K]T)
+
+	// Build sets and value maps for both slices
+	for _, item := range slice1 {
+		key := compareFunc(item)
+		set1[key] = struct{}{}
+		valueMap1[key] = item
+	}
+	for _, item := range slice2 {
+		key := compareFunc(item)
+		set2[key] = struct{}{}
+		valueMap2[key] = item
+	}
+
+	// Find elements unique to slice1
+	var onlyInSlice1 []T
+	for _, item := range slice1 {
+		key := compareFunc(item)
+		if _, ok := set2[key]; !ok {
+			onlyInSlice1 = append(onlyInSlice1, item)
+		}
+	}
+
+	// Find elements unique to slice2
+	var onlyInSlice2 []T
+	for _, item := range slice2 {
+		key := compareFunc(item)
+		if _, ok := set1[key]; !ok {
+			onlyInSlice2 = append(onlyInSlice2, item)
+		}
+	}
+
+	return onlyInSlice1, onlyInSlice2
 }
 
 // Union returns a new slice containing unique elements from both slices.

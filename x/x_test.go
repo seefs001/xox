@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"reflect"
@@ -2577,5 +2578,128 @@ func TestTail(t *testing.T) {
 		strings := []string{"first", "second", "third"}
 		result := x.Tail(strings)
 		assert.Equal(t, []string{"second", "third"}, result)
+	})
+}
+
+// TestDifference tests the Difference function with various scenarios
+func TestDifference(t *testing.T) {
+	t.Run("Basic difference", func(t *testing.T) {
+		slice1 := []int{1, 2, 3, 4}
+		slice2 := []int{3, 4, 5, 6}
+		left, right := x.Difference(slice1, slice2)
+		assert.Equal(t, []int{1, 2}, left)
+		assert.Equal(t, []int{5, 6}, right)
+	})
+
+	t.Run("Empty slices", func(t *testing.T) {
+		left, right := x.Difference([]int{}, []int{})
+		assert.Empty(t, left)
+		assert.Empty(t, right)
+	})
+
+	t.Run("Nil slices", func(t *testing.T) {
+		left, right := x.Difference[int](nil, nil)
+		assert.Nil(t, left)
+		assert.Nil(t, right)
+
+		left, right = x.Difference([]int{1, 2}, nil)
+		assert.Equal(t, []int{1, 2}, left)
+		assert.Nil(t, right)
+
+		left, right = x.Difference[int](nil, []int{1, 2})
+		assert.Equal(t, []int{1, 2}, left)
+		assert.Nil(t, right)
+	})
+
+	t.Run("No differences", func(t *testing.T) {
+		slice1 := []int{1, 2, 3}
+		slice2 := []int{1, 2, 3}
+		left, right := x.Difference(slice1, slice2)
+		assert.Empty(t, left)
+		assert.Empty(t, right)
+	})
+
+	t.Run("String slices", func(t *testing.T) {
+		slice1 := []string{"a", "b", "c"}
+		slice2 := []string{"b", "c", "d"}
+		left, right := x.Difference(slice1, slice2)
+		assert.Equal(t, []string{"a"}, left)
+		assert.Equal(t, []string{"d"}, right)
+	})
+}
+
+// TestDifferenceBy tests the DifferenceBy function with various scenarios
+func TestDifferenceBy(t *testing.T) {
+	type Person struct {
+		ID   int
+		Name string
+	}
+
+	t.Run("Basic difference by ID", func(t *testing.T) {
+		slice1 := []Person{{1, "Alice"}, {2, "Bob"}, {3, "Charlie"}}
+		slice2 := []Person{{2, "Bob"}, {3, "Charlie"}, {4, "David"}}
+		left, right := x.DifferenceBy(slice1, slice2, func(p Person) int { return p.ID })
+		assert.Equal(t, []Person{{1, "Alice"}}, left)
+		assert.Equal(t, []Person{{4, "David"}}, right)
+	})
+
+	t.Run("Empty slices", func(t *testing.T) {
+		left, right := x.DifferenceBy([]Person{}, []Person{}, func(p Person) int { return p.ID })
+		assert.Empty(t, left)
+		assert.Empty(t, right)
+	})
+
+	t.Run("Nil slices", func(t *testing.T) {
+		left, right := x.DifferenceBy[Person, int](nil, nil, func(p Person) int { return p.ID })
+		assert.Nil(t, left)
+		assert.Nil(t, right)
+
+		slice := []Person{{1, "Alice"}}
+		left, right = x.DifferenceBy(slice, nil, func(p Person) int { return p.ID })
+		assert.Equal(t, slice, left)
+		assert.Nil(t, right)
+
+		left, right = x.DifferenceBy[Person, int](nil, slice, func(p Person) int { return p.ID })
+		assert.Nil(t, left)
+		assert.Equal(t, slice, right)
+	})
+
+	t.Run("No differences", func(t *testing.T) {
+		slice1 := []Person{{1, "Alice"}, {2, "Bob"}}
+		slice2 := []Person{{1, "Alice"}, {2, "Bob"}}
+		left, right := x.DifferenceBy(slice1, slice2, func(p Person) int { return p.ID })
+		assert.Empty(t, left)
+		assert.Empty(t, right)
+	})
+
+	t.Run("Different compare functions", func(t *testing.T) {
+		slice1 := []Person{{1, "Alice"}, {2, "Bob"}, {3, "Charlie"}}
+		slice2 := []Person{{1, "Alice"}, {2, "Bobby"}, {4, "David"}}
+
+		// Compare by ID
+		left, right := x.DifferenceBy(slice1, slice2, func(p Person) int { return p.ID })
+		assert.Equal(t, []Person{{3, "Charlie"}}, left)
+		assert.Equal(t, []Person{{4, "David"}}, right)
+
+		// Compare by Name
+		left, right = x.DifferenceBy(slice1, slice2, func(p Person) string { return p.Name })
+		assert.Equal(t, []Person{{2, "Bob"}, {3, "Charlie"}}, left)
+		assert.Equal(t, []Person{{2, "Bobby"}, {4, "David"}}, right)
+	})
+
+	t.Run("Complex compare function", func(t *testing.T) {
+		type Item struct {
+			ID    int
+			Value float64
+		}
+		slice1 := []Item{{1, 1.5}, {2, 2.5}, {3, 3.5}}
+		slice2 := []Item{{1, 1.6}, {2, 2.5}, {4, 4.5}}
+
+		// Compare by rounded Value
+		left, right := x.DifferenceBy(slice1, slice2, func(i Item) int {
+			return int(math.Round(i.Value))
+		})
+		assert.Equal(t, []Item{{3, 3.5}}, left)
+		assert.Equal(t, []Item{{4, 4.5}}, right)
 	})
 }
