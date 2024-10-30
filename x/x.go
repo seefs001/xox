@@ -695,6 +695,33 @@ func Unique[T comparable](collection []T) []T {
 	return result
 }
 
+// UniqueByKey returns a new slice with duplicate elements removed based on a key function.
+//
+// Example:
+//
+//	type Person struct {
+//	    ID   int
+//	    Name string
+//	}
+//	people := []Person{{1, "Alice"}, {2, "Bob"}, {1, "Alice"}}
+//	unique := UniqueByKey(people, func(p Person) int { return p.ID })
+//	fmt.Println(unique) // Outputs: [{1 Alice} {2 Bob}]
+func UniqueByKey[T any, K comparable](collection []T, keyFn func(T) K) []T {
+	if collection == nil {
+		return nil
+	}
+	seen := make(map[K]struct{})
+	var result []T
+	for _, v := range collection {
+		key := keyFn(v)
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
 // Chunk splits a slice into chunks of specified size.
 //
 // Example:
@@ -2342,6 +2369,74 @@ func setField(field reflect.Value, values []string) error {
 		}
 	default:
 		return xerror.Newf("unsupported field type: %v", field.Kind())
+	}
+	return nil
+}
+
+// ForEachMap iterates over the map and applies the action to each key-value pair.
+//
+// Parameters:
+// - m: The map to iterate over
+// - action: A function that takes a key and value as parameters
+//
+// Example:
+//
+//	users := map[string]int{
+//	    "Alice": 25,
+//	    "Bob":   30,
+//	    "Carol": 35,
+//	}
+//	ForEachMap(users, func(name string, age int) {
+//	    fmt.Printf("%s is %d years old\n", name, age)
+//	})
+//	// Output (order may vary):
+//	// Alice is 25 years old
+//	// Bob is 30 years old
+//	// Carol is 35 years old
+func ForEachMap[K comparable, V any](m map[K]V, action func(K, V)) {
+	if m == nil || action == nil {
+		return
+	}
+	for k, v := range m {
+		action(k, v)
+	}
+}
+
+// ForEachMapWithError iterates over the map and applies the action to each key-value pair,
+// stopping if an error occurs.
+//
+// Parameters:
+// - m: The map to iterate over
+// - action: A function that takes a key and value as parameters and returns an error
+//
+// Returns:
+// - error: The first error encountered during iteration, or nil if successful
+//
+// Example:
+//
+//	users := map[string]int{
+//	    "Alice": 25,
+//	    "Bob":   -1, // Invalid age
+//	    "Carol": 35,
+//	}
+//	err := ForEachMapWithError(users, func(name string, age int) error {
+//	    if age < 0 {
+//	        return fmt.Errorf("invalid age %d for user %s", age, name)
+//	    }
+//	    fmt.Printf("%s is %d years old\n", name, age)
+//	    return nil
+//	})
+//	if err != nil {
+//	    fmt.Printf("Error: %v\n", err)
+//	}
+func ForEachMapWithError[K comparable, V any](m map[K]V, action func(K, V) error) error {
+	if m == nil || action == nil {
+		return nil
+	}
+	for k, v := range m {
+		if err := action(k, v); err != nil {
+			return xerror.Wrapf(err, "error processing map entry with key %v", k)
+		}
 	}
 	return nil
 }

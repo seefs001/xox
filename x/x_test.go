@@ -1815,3 +1815,243 @@ func TestStructToMap(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestUniqueByKey(t *testing.T) {
+	t.Run("Basic struct slice", func(t *testing.T) {
+		type Person struct {
+			ID   int
+			Name string
+		}
+		input := []Person{
+			{1, "Alice"},
+			{2, "Bob"},
+			{1, "Alice Clone"},
+			{3, "Charlie"},
+		}
+		result := x.UniqueByKey(input, func(p Person) int { return p.ID })
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []Person{
+			{1, "Alice"},
+			{2, "Bob"},
+			{3, "Charlie"},
+		}, result)
+	})
+
+	t.Run("Empty slice", func(t *testing.T) {
+		var input []string
+		result := x.UniqueByKey(input, func(s string) string { return s })
+		assert.Empty(t, result)
+	})
+
+	t.Run("Nil slice", func(t *testing.T) {
+		var input []int
+		result := x.UniqueByKey(input, func(i int) int { return i })
+		assert.Nil(t, result)
+	})
+
+	t.Run("Complex key function", func(t *testing.T) {
+		type User struct {
+			FirstName string
+			LastName  string
+			Age       int
+		}
+		input := []User{
+			{"John", "Doe", 30},
+			{"Jane", "Doe", 25},
+			{"John", "Smith", 35},
+			{"John", "Doe", 40},
+		}
+		// Unique by full name
+		result := x.UniqueByKey(input, func(u User) string {
+			return u.FirstName + " " + u.LastName
+		})
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []User{
+			{"John", "Doe", 30},
+			{"Jane", "Doe", 25},
+			{"John", "Smith", 35},
+		}, result)
+	})
+
+	t.Run("Composite key", func(t *testing.T) {
+		type Event struct {
+			Date     string
+			Category string
+			ID       int
+		}
+		input := []Event{
+			{"2024-01-01", "A", 1},
+			{"2024-01-01", "A", 2},
+			{"2024-01-01", "B", 1},
+			{"2024-01-02", "A", 1},
+		}
+		// Unique by date and category combination
+		result := x.UniqueByKey(input, func(e Event) struct {
+			date     string
+			category string
+		} {
+			return struct {
+				date     string
+				category string
+			}{e.Date, e.Category}
+		})
+		assert.Len(t, result, 3)
+		assert.ElementsMatch(t, []Event{
+			{"2024-01-01", "A", 1},
+			{"2024-01-01", "B", 1},
+			{"2024-01-02", "A", 1},
+		}, result)
+	})
+}
+
+func TestForEachMap(t *testing.T) {
+	t.Run("Basic map iteration", func(t *testing.T) {
+		m := map[string]int{
+			"a": 1,
+			"b": 2,
+			"c": 3,
+		}
+		result := make(map[string]int)
+		x.ForEachMap(m, func(k string, v int) {
+			result[k] = v * 2
+		})
+		assert.Equal(t, map[string]int{
+			"a": 2,
+			"b": 4,
+			"c": 6,
+		}, result)
+	})
+
+	t.Run("Empty map", func(t *testing.T) {
+		m := map[string]int{}
+		count := 0
+		x.ForEachMap(m, func(k string, v int) {
+			count++
+		})
+		assert.Zero(t, count)
+	})
+
+	t.Run("Nil map", func(t *testing.T) {
+		var m map[string]int
+		count := 0
+		x.ForEachMap(m, func(k string, v int) {
+			count++
+		})
+		assert.Zero(t, count)
+	})
+
+	t.Run("Nil action", func(t *testing.T) {
+		m := map[string]int{"a": 1}
+		assert.NotPanics(t, func() {
+			x.ForEachMap(m, nil)
+		})
+	})
+
+	t.Run("Complex value type", func(t *testing.T) {
+		type Person struct {
+			Name string
+			Age  int
+		}
+		m := map[int]Person{
+			1: {Name: "Alice", Age: 30},
+			2: {Name: "Bob", Age: 25},
+		}
+		names := make([]string, 0)
+		x.ForEachMap(m, func(k int, v Person) {
+			names = append(names, v.Name)
+		})
+		assert.ElementsMatch(t, []string{"Alice", "Bob"}, names)
+	})
+}
+
+func TestForEachMapWithError(t *testing.T) {
+	t.Run("Successful iteration", func(t *testing.T) {
+		m := map[string]int{
+			"a": 1,
+			"b": 2,
+			"c": 3,
+		}
+		result := make(map[string]int)
+		err := x.ForEachMapWithError(m, func(k string, v int) error {
+			result[k] = v * 2
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]int{
+			"a": 2,
+			"b": 4,
+			"c": 6,
+		}, result)
+	})
+
+	t.Run("Error during iteration", func(t *testing.T) {
+		m := map[string]int{
+			"a": 1,
+			"b": -1,
+			"c": 3,
+		}
+		result := make(map[string]int)
+		err := x.ForEachMapWithError(m, func(k string, v int) error {
+			if v < 0 {
+				return fmt.Errorf("negative value found: %d", v)
+			}
+			result[k] = v * 2
+			return nil
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "negative value found: -1")
+		assert.Equal(t, map[string]int{
+			"a": 2,
+		}, result)
+	})
+
+	t.Run("Empty map", func(t *testing.T) {
+		m := map[string]int{}
+		count := 0
+		err := x.ForEachMapWithError(m, func(k string, v int) error {
+			count++
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Zero(t, count)
+	})
+
+	t.Run("Nil map", func(t *testing.T) {
+		var m map[string]int
+		count := 0
+		err := x.ForEachMapWithError(m, func(k string, v int) error {
+			count++
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Zero(t, count)
+	})
+
+	t.Run("Nil action", func(t *testing.T) {
+		m := map[string]int{"a": 1}
+		err := x.ForEachMapWithError(m, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Complex value type with error", func(t *testing.T) {
+		type Person struct {
+			Name string
+			Age  int
+		}
+		m := map[int]Person{
+			1: {Name: "Alice", Age: 30},
+			2: {Name: "Bob", Age: -1},
+		}
+		names := make([]string, 0)
+		err := x.ForEachMapWithError(m, func(k int, v Person) error {
+			if v.Age < 0 {
+				return fmt.Errorf("invalid age %d for person %s", v.Age, v.Name)
+			}
+			names = append(names, v.Name)
+			return nil
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid age -1 for person Bob")
+		assert.Equal(t, []string{"Alice"}, names)
+	})
+}
