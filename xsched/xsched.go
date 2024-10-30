@@ -35,6 +35,29 @@ type jobEntry struct {
 	runOnAdd bool
 }
 
+// CronField represents a single field in a cron expression
+type CronField struct {
+	Min   int
+	Max   int
+	Valid []int
+}
+
+// CronExpression represents a parsed cron expression
+type CronExpression struct {
+	Second     CronField
+	Minute     CronField
+	Hour       CronField
+	DayOfMonth CronField
+	Month      CronField
+	DayOfWeek  CronField
+}
+
+// CronBuilder helps build cron expressions using method chaining
+type CronBuilder struct {
+	expr *CronExpression
+	err  error
+}
+
 // New creates a new Cron instance with default tick interval of 1 second
 func New() *Cron {
 	return &Cron{
@@ -137,7 +160,7 @@ func (c *Cron) run() {
 	ticker := time.NewTicker(c.tickInterval)
 	defer ticker.Stop()
 
-	for {
+	for range ticker.C {
 		c.mutex.RLock()
 		if !c.running {
 			c.mutex.RUnlock()
@@ -145,44 +168,27 @@ func (c *Cron) run() {
 		}
 
 		now := time.Now().In(c.location)
-		if len(c.jobs) == 0 {
-			c.mutex.RUnlock()
-			<-ticker.C
-			continue
-		}
-
-		earliestTime := time.Time{}
 		for _, job := range c.jobs {
-			if earliestTime.IsZero() || job.next.Before(earliestTime) {
-				earliestTime = job.next
+			if job.next.IsZero() {
+				job.next = job.schedule.Next(now)
+				continue
+			}
+
+			if now.After(job.next) || now.Equal(job.next) {
+				go func(j *jobEntry) {
+					defer func() {
+						if r := recover(); r != nil {
+							if c.errorHandler != nil {
+								c.errorHandler(fmt.Errorf("job panic: %v", r))
+							}
+						}
+					}()
+					j.job()
+				}(job)
+				job.next = job.schedule.Next(now)
 			}
 		}
 		c.mutex.RUnlock()
-
-		select {
-		case <-ticker.C:
-			c.mutex.Lock()
-			now = time.Now().In(c.location)
-			for _, job := range c.jobs {
-				if job.next.IsZero() {
-					continue
-				}
-				if !job.next.After(now) {
-					go func(j *jobEntry) {
-						defer func() {
-							if r := recover(); r != nil {
-								if c.errorHandler != nil {
-									c.errorHandler(fmt.Errorf("job panic: %v", r))
-								}
-							}
-						}()
-						j.job()
-					}(job)
-					job.next = job.schedule.Next(now)
-				}
-			}
-			c.mutex.Unlock()
-		}
 	}
 }
 
@@ -238,32 +244,40 @@ type cronSchedule struct {
 
 // Next returns the next activation time, later than the given time
 func (s *cronSchedule) Next(t time.Time) time.Time {
-	loc := t.Location()
-	t = t.Truncate(time.Second).Add(time.Second) // Round up to the next whole second
+	// Start with the next second
+	t = t.Add(time.Second)
 
-	// Set an upper limit for searching to prevent infinite loops
-	endTime := t.Add(5 * 365 * 24 * time.Hour) // 5 years into the future
+	// Reset sub-second nanoseconds
+	t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
-	for t.Before(endTime) {
-		month, day := t.Month(), t.Day()
-		hour, min, sec := t.Clock()
-
-		// Check if the current time satisfies the schedule
-		if s.matchField(s.month, int(month)) &&
-			s.matchField(s.dayOfMonth, day) &&
-			s.matchField(s.dayOfWeek, int(t.Weekday())) &&
-			s.matchField(s.hour, hour) &&
-			s.matchField(s.minute, min) &&
-			s.matchField(s.second, sec) {
-			return t.In(loc)
+	// Find the next matching time
+	for {
+		if !s.matchField(s.month, int(t.Month())) {
+			t = time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, t.Location())
+			continue
 		}
-
-		// Increment by one second
-		t = t.Add(time.Second)
+		if !s.matchField(s.dayOfMonth, t.Day()) || !s.matchField(s.dayOfWeek, int(t.Weekday())) {
+			t = t.AddDate(0, 0, 1)
+			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+			continue
+		}
+		if !s.matchField(s.hour, t.Hour()) {
+			t = t.Add(time.Hour)
+			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
+			continue
+		}
+		if !s.matchField(s.minute, t.Minute()) {
+			t = t.Add(time.Minute)
+			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, t.Location())
+			continue
+		}
+		if !s.matchField(s.second, t.Second()) {
+			t = t.Add(time.Second)
+			continue
+		}
+		break
 	}
-
-	// If no matching time is found within the limit
-	return time.Time{}
+	return t
 }
 
 // matchField checks if the value matches the field values
@@ -453,4 +467,298 @@ func (c *Cron) SetLocation(loc *time.Location) {
 	c.mutex.Lock()
 	c.location = loc
 	c.mutex.Unlock()
+}
+
+// NewCronExpression creates a new CronExpression with default field ranges
+func NewCronExpression() *CronExpression {
+	return &CronExpression{
+		Second:     CronField{Min: 0, Max: 59},
+		Minute:     CronField{Min: 0, Max: 59},
+		Hour:       CronField{Min: 0, Max: 23},
+		DayOfMonth: CronField{Min: 1, Max: 31},
+		Month:      CronField{Min: 1, Max: 12},
+		DayOfWeek:  CronField{Min: 0, Max: 6},
+	}
+}
+
+// ParseExpression parses a cron expression string into a CronExpression
+func ParseExpression(spec string) (*CronExpression, error) {
+	fields := strings.Fields(spec)
+	if len(fields) != 6 {
+		return nil, fmt.Errorf("invalid cron expression: expected 6 fields, got %d", len(fields))
+	}
+
+	expr := NewCronExpression()
+	fieldParsers := []struct {
+		field *CronField
+		value string
+	}{
+		{&expr.Second, fields[0]},
+		{&expr.Minute, fields[1]},
+		{&expr.Hour, fields[2]},
+		{&expr.DayOfMonth, fields[3]},
+		{&expr.Month, fields[4]},
+		{&expr.DayOfWeek, fields[5]},
+	}
+
+	for _, fp := range fieldParsers {
+		valid, err := parseField(fp.value, fp.field.Min, fp.field.Max)
+		if err != nil {
+			return nil, err
+		}
+		fp.field.Valid = valid
+	}
+
+	return expr, nil
+}
+
+// ValidateExpression validates a cron expression string
+func ValidateExpression(spec string) error {
+	_, err := ParseExpression(spec)
+	return err
+}
+
+// BuildSchedule creates a Schedule from a CronExpression
+func BuildSchedule(expr *CronExpression) Schedule {
+	return &cronSchedule{
+		second:     expr.Second.Valid,
+		minute:     expr.Minute.Valid,
+		hour:       expr.Hour.Valid,
+		dayOfMonth: expr.DayOfMonth.Valid,
+		month:      expr.Month.Valid,
+		dayOfWeek:  expr.DayOfWeek.Valid,
+	}
+}
+
+// BuildScheduleFromSpec creates a Schedule directly from a cron expression string
+func BuildScheduleFromSpec(spec string) (Schedule, error) {
+	expr, err := ParseExpression(spec)
+	if err != nil {
+		return nil, err
+	}
+	return BuildSchedule(expr), nil
+}
+
+// IsValid checks if a specific time matches the cron expression
+func (expr *CronExpression) IsValid(t time.Time) bool {
+	return contains(expr.Second.Valid, t.Second()) &&
+		contains(expr.Minute.Valid, t.Minute()) &&
+		contains(expr.Hour.Valid, t.Hour()) &&
+		contains(expr.DayOfMonth.Valid, t.Day()) &&
+		contains(expr.Month.Valid, int(t.Month())) &&
+		contains(expr.DayOfWeek.Valid, int(t.Weekday()))
+}
+
+// contains checks if a slice contains a specific value
+func contains(slice []int, val int) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
+}
+
+// NewCronBuilder creates a new CronBuilder instance
+func NewCronBuilder() *CronBuilder {
+	return &CronBuilder{
+		expr: NewCronExpression(),
+	}
+}
+
+// WithSeconds sets the seconds field
+func (b *CronBuilder) WithSeconds(seconds ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(seconds, b.expr.Second.Min, b.expr.Second.Max); err != nil {
+		b.err = fmt.Errorf("invalid seconds: %v", err)
+		return b
+	}
+	b.expr.Second.Valid = seconds
+	return b
+}
+
+// WithMinutes sets the minutes field
+func (b *CronBuilder) WithMinutes(minutes ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(minutes, b.expr.Minute.Min, b.expr.Minute.Max); err != nil {
+		b.err = fmt.Errorf("invalid minutes: %v", err)
+		return b
+	}
+	b.expr.Minute.Valid = minutes
+	return b
+}
+
+// WithHours sets the hours field
+func (b *CronBuilder) WithHours(hours ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(hours, b.expr.Hour.Min, b.expr.Hour.Max); err != nil {
+		b.err = fmt.Errorf("invalid hours: %v", err)
+		return b
+	}
+	b.expr.Hour.Valid = hours
+	return b
+}
+
+// WithDaysOfMonth sets the days of month field
+func (b *CronBuilder) WithDaysOfMonth(days ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(days, b.expr.DayOfMonth.Min, b.expr.DayOfMonth.Max); err != nil {
+		b.err = fmt.Errorf("invalid days of month: %v", err)
+		return b
+	}
+	b.expr.DayOfMonth.Valid = days
+	return b
+}
+
+// WithMonths sets the months field
+func (b *CronBuilder) WithMonths(months ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(months, b.expr.Month.Min, b.expr.Month.Max); err != nil {
+		b.err = fmt.Errorf("invalid months: %v", err)
+		return b
+	}
+	b.expr.Month.Valid = months
+	return b
+}
+
+// WithDaysOfWeek sets the days of week field
+func (b *CronBuilder) WithDaysOfWeek(days ...int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+	if err := validateRange(days, b.expr.DayOfWeek.Min, b.expr.DayOfWeek.Max); err != nil {
+		b.err = fmt.Errorf("invalid days of week: %v", err)
+		return b
+	}
+	b.expr.DayOfWeek.Valid = days
+	return b
+}
+
+// WithEverySecond sets the expression to run every second
+func (b *CronBuilder) WithEverySecond() *CronBuilder {
+	seconds := make([]int, b.expr.Second.Max-b.expr.Second.Min+1)
+	for i := range seconds {
+		seconds[i] = b.expr.Second.Min + i
+	}
+	return b.WithSeconds(seconds...)
+}
+
+// WithEveryMinute sets the expression to run every minute at second 0
+func (b *CronBuilder) WithEveryMinute() *CronBuilder {
+	minutes := make([]int, b.expr.Minute.Max-b.expr.Minute.Min+1)
+	for i := range minutes {
+		minutes[i] = b.expr.Minute.Min + i
+	}
+	return b.WithSeconds(0).WithMinutes(minutes...)
+}
+
+// WithEveryHour sets the expression to run every hour at minute 0, second 0
+func (b *CronBuilder) WithEveryHour() *CronBuilder {
+	hours := make([]int, b.expr.Hour.Max-b.expr.Hour.Min+1)
+	for i := range hours {
+		hours[i] = b.expr.Hour.Min + i
+	}
+	return b.WithSeconds(0).WithMinutes(0).WithHours(hours...)
+}
+
+// WithEveryDay sets the expression to run every day at 00:00:00
+func (b *CronBuilder) WithEveryDay() *CronBuilder {
+	return b.WithSeconds(0).WithMinutes(0).WithHours(0)
+}
+
+// WithInterval sets an interval for a specific field
+func (b *CronBuilder) WithInterval(field string, start, interval int) *CronBuilder {
+	if b.err != nil {
+		return b
+	}
+
+	var values []int
+	var min, max int
+
+	switch strings.ToLower(field) {
+	case "second":
+		min, max = b.expr.Second.Min, b.expr.Second.Max
+	case "minute":
+		min, max = b.expr.Minute.Min, b.expr.Minute.Max
+	case "hour":
+		min, max = b.expr.Hour.Min, b.expr.Hour.Max
+	default:
+		b.err = fmt.Errorf("invalid field: %s", field)
+		return b
+	}
+
+	if start < min || start > max {
+		b.err = fmt.Errorf("invalid start value %d for field %s", start, field)
+		return b
+	}
+
+	for i := start; i <= max; i += interval {
+		values = append(values, i)
+	}
+
+	switch strings.ToLower(field) {
+	case "second":
+		return b.WithSeconds(values...)
+	case "minute":
+		return b.WithMinutes(values...)
+	case "hour":
+		return b.WithHours(values...)
+	}
+
+	return b
+}
+
+// Build creates a Schedule from the builder
+func (b *CronBuilder) Build() (Schedule, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	return BuildSchedule(b.expr), nil
+}
+
+// validateRange checks if all values are within the specified range
+func validateRange(values []int, min, max int) error {
+	if len(values) == 0 {
+		return fmt.Errorf("no values provided")
+	}
+	for _, v := range values {
+		if v < min || v > max {
+			return fmt.Errorf("value %d out of range [%d,%d]", v, min, max)
+		}
+	}
+	return nil
+}
+
+// String returns the cron expression as a string
+func (b *CronBuilder) String() (string, error) {
+	if b.err != nil {
+		return "", b.err
+	}
+
+	expr := b.expr
+	return fmt.Sprintf("%v %v %v %v %v %v",
+		formatField(expr.Second.Valid),
+		formatField(expr.Minute.Valid),
+		formatField(expr.Hour.Valid),
+		formatField(expr.DayOfMonth.Valid),
+		formatField(expr.Month.Valid),
+		formatField(expr.DayOfWeek.Valid)), nil
+}
+
+// formatField converts a slice of integers to a cron field string
+func formatField(values []int) string {
+	if len(values) == 0 {
+		return "*"
+	}
+	return strings.Trim(strings.Join(strings.Fields(fmt.Sprint(values)), ","), "[]")
 }

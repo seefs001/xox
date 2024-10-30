@@ -402,3 +402,246 @@ func TestCronStartStop(t *testing.T) {
 		// No execution as expected
 	}
 }
+
+func TestCronBuilder(t *testing.T) {
+	t.Run("basic builder operations", func(t *testing.T) {
+		schedule, err := NewCronBuilder().
+			WithSeconds(0).
+			WithMinutes(30).
+			WithHours(12).
+			WithDaysOfMonth(1).
+			WithMonths(1, 6, 12).
+			WithDaysOfWeek(1, 3, 5).
+			Build()
+
+		assert.NoError(t, err)
+		assert.NotNil(t, schedule)
+
+		cronSchedule, ok := schedule.(*cronSchedule)
+		assert.True(t, ok)
+		assert.Equal(t, []int{0}, cronSchedule.second)
+		assert.Equal(t, []int{30}, cronSchedule.minute)
+		assert.Equal(t, []int{12}, cronSchedule.hour)
+		assert.Equal(t, []int{1}, cronSchedule.dayOfMonth)
+		assert.Equal(t, []int{1, 6, 12}, cronSchedule.month)
+		assert.Equal(t, []int{1, 3, 5}, cronSchedule.dayOfWeek)
+	})
+
+	t.Run("convenience methods", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			builder  func() *CronBuilder
+			validate func(*testing.T, Schedule)
+		}{
+			{
+				name: "WithEverySecond",
+				builder: func() *CronBuilder {
+					return NewCronBuilder().WithEverySecond()
+				},
+				validate: func(t *testing.T, s Schedule) {
+					cs := s.(*cronSchedule)
+					assert.Len(t, cs.second, 60)
+				},
+			},
+			{
+				name: "WithEveryMinute",
+				builder: func() *CronBuilder {
+					return NewCronBuilder().WithEveryMinute()
+				},
+				validate: func(t *testing.T, s Schedule) {
+					cs := s.(*cronSchedule)
+					assert.Equal(t, []int{0}, cs.second)
+					assert.Len(t, cs.minute, 60)
+				},
+			},
+			{
+				name: "WithEveryHour",
+				builder: func() *CronBuilder {
+					return NewCronBuilder().WithEveryHour()
+				},
+				validate: func(t *testing.T, s Schedule) {
+					cs := s.(*cronSchedule)
+					assert.Equal(t, []int{0}, cs.second)
+					assert.Equal(t, []int{0}, cs.minute)
+					assert.Len(t, cs.hour, 24)
+				},
+			},
+			{
+				name: "WithEveryDay",
+				builder: func() *CronBuilder {
+					return NewCronBuilder().WithEveryDay()
+				},
+				validate: func(t *testing.T, s Schedule) {
+					cs := s.(*cronSchedule)
+					assert.Equal(t, []int{0}, cs.second)
+					assert.Equal(t, []int{0}, cs.minute)
+					assert.Equal(t, []int{0}, cs.hour)
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				schedule, err := tc.builder().Build()
+				assert.NoError(t, err)
+				assert.NotNil(t, schedule)
+				tc.validate(t, schedule)
+			})
+		}
+	})
+
+	t.Run("interval operations", func(t *testing.T) {
+		schedule, err := NewCronBuilder().
+			WithInterval("second", 0, 15).
+			WithInterval("minute", 0, 30).
+			WithInterval("hour", 0, 4).
+			Build()
+
+		assert.NoError(t, err)
+		assert.NotNil(t, schedule)
+
+		cs := schedule.(*cronSchedule)
+		assert.Equal(t, []int{0, 15, 30, 45}, cs.second)
+		assert.Equal(t, []int{0, 30}, cs.minute)
+		assert.Equal(t, []int{0, 4, 8, 12, 16, 20}, cs.hour)
+	})
+
+	t.Run("error handling", func(t *testing.T) {
+		testCases := []struct {
+			name    string
+			builder func() (*CronBuilder, error)
+		}{
+			{
+				name: "invalid seconds",
+				builder: func() (*CronBuilder, error) {
+					return NewCronBuilder().WithSeconds(60), nil
+				},
+			},
+			{
+				name: "invalid minutes",
+				builder: func() (*CronBuilder, error) {
+					return NewCronBuilder().WithMinutes(-1), nil
+				},
+			},
+			{
+				name: "invalid hours",
+				builder: func() (*CronBuilder, error) {
+					return NewCronBuilder().WithHours(24), nil
+				},
+			},
+			{
+				name: "invalid interval field",
+				builder: func() (*CronBuilder, error) {
+					return NewCronBuilder().WithInterval("invalid", 0, 1), nil
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				builder, _ := tc.builder()
+				_, err := builder.Build()
+				assert.Error(t, err)
+			})
+		}
+	})
+}
+
+func TestCronExpression(t *testing.T) {
+	t.Run("parse expression", func(t *testing.T) {
+		expr, err := ParseExpression("*/15 0 */4 * * 1-5")
+		assert.NoError(t, err)
+		assert.NotNil(t, expr)
+
+		assert.Equal(t, []int{0, 15, 30, 45}, expr.Second.Valid)
+		assert.Equal(t, []int{0}, expr.Minute.Valid)
+		assert.Equal(t, []int{0, 4, 8, 12, 16, 20}, expr.Hour.Valid)
+		assert.Equal(t, []int{1, 2, 3, 4, 5}, expr.DayOfWeek.Valid)
+	})
+
+	t.Run("validate expression", func(t *testing.T) {
+		testCases := []struct {
+			spec  string
+			valid bool
+		}{
+			{"* * * * * *", true},
+			{"*/15 * * * * *", true},
+			{"0 0 0 1 * *", true},
+			{"invalid", false},
+			{"* * * *", false},
+			{"60 * * * * *", false},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.spec, func(t *testing.T) {
+				err := ValidateExpression(tc.spec)
+				if tc.valid {
+					assert.NoError(t, err)
+				} else {
+					assert.Error(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("is valid time", func(t *testing.T) {
+		expr, err := ParseExpression("0 30 9 * * 1-5")
+		assert.NoError(t, err)
+
+		validTime := time.Date(2023, 5, 1, 9, 30, 0, 0, time.UTC)   // Monday 9:30:00
+		invalidTime := time.Date(2023, 5, 6, 9, 30, 0, 0, time.UTC) // Saturday 9:30:00
+
+		assert.True(t, expr.IsValid(validTime))
+		assert.False(t, expr.IsValid(invalidTime))
+	})
+
+	t.Run("build schedule from spec", func(t *testing.T) {
+		schedule, err := BuildScheduleFromSpec("*/15 * * * * *")
+		assert.NoError(t, err)
+		assert.NotNil(t, schedule)
+
+		now := time.Now()
+		next := schedule.Next(now)
+		assert.True(t, next.After(now))
+	})
+}
+
+func TestCronBuilderIntegration(t *testing.T) {
+	c := New()
+	schedule, err := NewCronBuilder().
+		WithSeconds(0).
+		WithMinutes(0).
+		WithHours(12).
+		WithDaysOfWeek(1).
+		Build()
+
+	assert.NoError(t, err)
+
+	var executed bool
+	var mu sync.Mutex
+	job := func() {
+		mu.Lock()
+		executed = true
+		mu.Unlock()
+	}
+
+	c.addJobWithOptions(schedule, job, false)
+	c.Start()
+
+	// Wait for potential execution
+	time.Sleep(100 * time.Millisecond)
+	c.Stop()
+
+	mu.Lock()
+	wasExecuted := executed
+	mu.Unlock()
+
+	// Check if job executed at the right time
+	now := time.Now()
+	shouldExecute := now.Hour() == 12 &&
+		now.Minute() == 0 &&
+		now.Second() == 0 &&
+		now.Weekday() == time.Monday
+
+	assert.Equal(t, shouldExecute, wasExecuted)
+}
