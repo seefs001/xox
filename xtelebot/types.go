@@ -4039,7 +4039,7 @@ func (CloseConfig) params() (Params, error) {
 // BaseChat is base type for all chat config types.
 type BaseChat struct {
 	// user_id(int64) or username
-	ChatID                   int64       `json:"chat_id"`                       // required
+	ChatID                   string      `json:"chat_id"`                       // required
 	ChannelUsername          string      `json:"channel_username,omitempty"`    // optional
 	ProtectContent           bool        `json:"protect_content,omitempty"`     // optional
 	ReplyToMessageID         int         `json:"reply_to_message_id,omitempty"` // optional

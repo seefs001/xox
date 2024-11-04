@@ -234,7 +234,7 @@ func sendGreeting(ctx context.Context, bot *xtelebot.Bot, chatID int64, name str
 	sendDiceParam := xtelebot.DiceConfig{
 		Emoji: "🎲",
 		BaseChat: xtelebot.BaseChat{
-			ChatID: chatID,
+			ChatID: fmt.Sprintf("%d", chatID),
 		},
 	}
 
