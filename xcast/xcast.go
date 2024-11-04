@@ -413,10 +413,15 @@ func ConvertStruct(src any, dst any) error {
 //	}
 //	fmt.Printf("%+v\n", person) // Output: {Name:Alice Age:30}
 func StringToStruct[T any](s string) (T, error) {
+	return BytesToStruct[T]([]byte(s))
+}
+
+// BytesToStruct converts a byte slice to a struct of type T.
+func BytesToStruct[T any](b []byte) (T, error) {
 	var result T
-	err := json.Unmarshal([]byte(s), &result)
+	err := json.Unmarshal(b, &result)
 	if err != nil {
-		return result, xerror.Wrap(err, "failed to convert string to struct")
+		return result, xerror.Wrap(err, "failed to convert bytes to struct")
 	}
 	return result, nil
 }
@@ -438,11 +443,34 @@ func StringToStruct[T any](s string) (T, error) {
 //	}
 //	fmt.Println(jsonStr) // Output: {"name":"Bob","age":25}
 func StructToString[T any](v T) (string, error) {
-	bytes, err := json.Marshal(v)
+	bytes, err := StructToBytes(v)
 	if err != nil {
-		return "", xerror.Wrap(err, "failed to convert struct to string")
+		return "", err
 	}
 	return string(bytes), nil
+}
+
+// StructToBytes converts a struct of type T to a byte slice.
+// It uses json.Marshal to perform the conversion.
+//
+// Example:
+//
+//	type Person struct {
+//		Name string `json:"name"`
+//		Age  int    `json:"age"`
+//	}
+//
+//	person := Person{Name: "Bob", Age: 25}
+//	jsonBytes, err := StructToBytes(person)
+//	if err != nil {
+//		// handle error
+//	}
+func StructToBytes[T any](v T) ([]byte, error) {
+	bytes, err := json.Marshal(v)
+	if err != nil {
+		return nil, xerror.Wrap(err, "failed to convert struct to bytes")
+	}
+	return bytes, nil
 }
 
 func MustToString(value any) string {

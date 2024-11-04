@@ -55,14 +55,26 @@ type Command struct {
 }
 
 // NewApp creates a new CLI application
-func NewApp(name, description, version string) *App {
-	return &App{
-		Name:        name,
-		Description: description,
-		Version:     version,
-		Flags:       flag.NewFlagSet(name, flag.ExitOnError),
-		Commands:    make(map[string]*Command),
+// params:
+//   - name: the name of the application
+//   - description: the description of the application
+//   - version: the version of the application
+func NewApp(name ...string) *App {
+	app := &App{
+		Flags:    flag.NewFlagSet("app", flag.ExitOnError),
+		Commands: make(map[string]*Command),
 	}
+	if len(name) > 0 {
+		app.Name = name[0]
+		app.Flags = flag.NewFlagSet(name[0], flag.ExitOnError)
+		if len(name) > 1 {
+			app.Description = name[1]
+			if len(name) > 2 {
+				app.Version = name[2]
+			}
+		}
+	}
+	return app
 }
 
 // AddCommand adds a new command to the application

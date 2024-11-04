@@ -103,7 +103,15 @@ func Warnf(format string, args ...any) {
 }
 
 // Error logs an error message.
-func Error(msg string, args ...any) {
+func Error(msgOrErr interface{}, args ...any) {
+	var msg string
+	if err, ok := msgOrErr.(error); ok {
+		msg = err.Error()
+	} else if str, ok := msgOrErr.(string); ok {
+		msg = str
+	} else {
+		msg = fmt.Sprint(msgOrErr)
+	}
 	log(slog.LevelError, msg, args...)
 }
 

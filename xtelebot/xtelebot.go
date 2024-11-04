@@ -193,6 +193,28 @@ var urlValuesMethods = []string{
 	MethodGetMyCommands,
 }
 
+// APICall sends a request to the Telegram API with a JSON object as the body
+func (b *Bot) APICall(ctx context.Context, method string, params interface{}) ([]byte, error) {
+	body, err := b.APIRequestWithObject(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp APIResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		b.errorHandler(fmt.Errorf("failed to unmarshal response: %w", err))
+		return nil, err
+	}
+
+	if !resp.Ok {
+		err := xerror.Newf("API request failed with status code %d: %s", resp.ErrorCode, resp.Description)
+		b.errorHandler(err)
+		return nil, err
+	}
+
+	return resp.Result, nil
+}
+
 func (b *Bot) APIRequestWithObject(ctx context.Context, method string, params interface{}) ([]byte, error) {
 	jsonData, err := x.ToJSON(params)
 	if err != nil {
