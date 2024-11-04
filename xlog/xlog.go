@@ -74,7 +74,8 @@ func SetDefaultLogLevel(level slog.Level) {
 
 // Debug logs a debug message.
 func Debug(msg string, args ...any) {
-	log(slog.LevelDebug, msg, args...)
+	processedArgs := processArgs(args...)
+	log(slog.LevelDebug, msg, processedArgs...)
 }
 
 // Debugf logs a formatted debug message.
@@ -84,7 +85,8 @@ func Debugf(format string, args ...any) {
 
 // Info logs an info message.
 func Info(msg string, args ...any) {
-	log(slog.LevelInfo, msg, args...)
+	processedArgs := processArgs(args...)
+	log(slog.LevelInfo, msg, processedArgs...)
 }
 
 // Infof logs a formatted info message.
@@ -94,7 +96,8 @@ func Infof(format string, args ...any) {
 
 // Warn logs a warning message.
 func Warn(msg string, args ...any) {
-	log(slog.LevelWarn, msg, args...)
+	processedArgs := processArgs(args...)
+	log(slog.LevelWarn, msg, processedArgs...)
 }
 
 // Warnf logs a formatted warning message.
@@ -112,7 +115,8 @@ func Error(msgOrErr interface{}, args ...any) {
 	} else {
 		msg = fmt.Sprint(msgOrErr)
 	}
-	log(slog.LevelError, msg, args...)
+	processedArgs := processArgs(args...)
+	log(slog.LevelError, msg, processedArgs...)
 }
 
 // Errorf logs a formatted error message.
@@ -122,7 +126,8 @@ func Errorf(format string, args ...any) {
 
 // Fatal logs a fatal error message and then calls os.Exit(1).
 func Fatal(msg string, args ...any) {
-	log(slog.LevelError, msg, args...)
+	processedArgs := processArgs(args...)
+	log(slog.LevelError, msg, processedArgs...)
 	os.Exit(1)
 }
 
@@ -130,6 +135,55 @@ func Fatal(msg string, args ...any) {
 func Fatalf(format string, args ...any) {
 	log(slog.LevelError, fmt.Sprintf(format, args...))
 	os.Exit(1)
+}
+
+// processArgs converts mixed args (slog.Attr and key-value pairs) to a slice of any
+func processArgs(args ...any) []any {
+	if len(args) == 0 {
+		return nil
+	}
+
+	var processed []any
+
+	for i := 0; i < len(args); {
+		// Check if the current argument is a slog.Attr
+		if attr, ok := args[i].(slog.Attr); ok {
+			processed = append(processed, attr.Key, attr.Value)
+			i++
+			continue
+		}
+
+		// Handle key-value pairs
+		if i+1 < len(args) {
+			// If next item is not a slog.Attr, treat current and next as key-value pair
+			if _, ok := args[i+1].(slog.Attr); !ok {
+				processed = append(processed, args[i], args[i+1])
+				i += 2
+				continue
+			}
+		}
+
+		// Handle single remaining item
+		if i < len(args) {
+			processed = append(processed, args[i])
+			i++
+		}
+	}
+
+	return processed
+}
+
+func logWithAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	// Convert slog.Attr slice to any slice
+	args := make([]any, len(attrs)*2)
+	for i, attr := range attrs {
+		args[i*2] = attr.Key
+		args[i*2+1] = attr.Value
+	}
+	defaultLogger.Log(context.Background(), level, msg, args...)
 }
 
 // log is a helper function to add file and line information if configured
@@ -760,8 +814,9 @@ func (h *RotatingFileHandler) Rotate() error {
 
 // ColorLog logs a message with a custom color.
 func ColorLog(level slog.Level, color xcolor.ColorCode, msg string, args ...any) {
+	processedArgs := processArgs(args...)
 	coloredMsg := xcolor.Colorize(color, msg)
-	log(level, coloredMsg, args...)
+	log(level, coloredMsg, processedArgs...)
 }
 
 // ColorLogf logs a formatted message with a custom color.
@@ -772,7 +827,8 @@ func ColorLogf(level slog.Level, color xcolor.ColorCode, format string, args ...
 
 // RedLog logs a message in red.
 func RedLog(level slog.Level, msg string, args ...any) {
-	ColorLog(level, xcolor.Red, msg, args...)
+	processedArgs := processArgs(args...)
+	ColorLog(level, xcolor.Red, msg, processedArgs...)
 }
 
 // RedLogf logs a formatted message in red.
@@ -782,7 +838,8 @@ func RedLogf(level slog.Level, format string, args ...any) {
 
 // GreenLog logs a message in green.
 func GreenLog(level slog.Level, msg string, args ...any) {
-	ColorLog(level, xcolor.Green, msg, args...)
+	processedArgs := processArgs(args...)
+	ColorLog(level, xcolor.Green, msg, processedArgs...)
 }
 
 // GreenLogf logs a formatted message in green.
@@ -792,7 +849,8 @@ func GreenLogf(level slog.Level, format string, args ...any) {
 
 // YellowLog logs a message in yellow.
 func YellowLog(level slog.Level, msg string, args ...any) {
-	ColorLog(level, xcolor.Yellow, msg, args...)
+	processedArgs := processArgs(args...)
+	ColorLog(level, xcolor.Yellow, msg, processedArgs...)
 }
 
 // YellowLogf logs a formatted message in yellow.
@@ -802,7 +860,8 @@ func YellowLogf(level slog.Level, format string, args ...any) {
 
 // BlueLog logs a message in blue.
 func BlueLog(level slog.Level, msg string, args ...any) {
-	ColorLog(level, xcolor.Blue, msg, args...)
+	processedArgs := processArgs(args...)
+	ColorLog(level, xcolor.Blue, msg, processedArgs...)
 }
 
 // BlueLogf logs a formatted message in blue.
@@ -812,7 +871,8 @@ func BlueLogf(level slog.Level, format string, args ...any) {
 
 // PurpleLog logs a message in purple.
 func PurpleLog(level slog.Level, msg string, args ...any) {
-	ColorLog(level, xcolor.Purple, msg, args...)
+	processedArgs := processArgs(args...)
+	ColorLog(level, xcolor.Purple, msg, processedArgs...)
 }
 
 // PurpleLogf logs a formatted message in purple.

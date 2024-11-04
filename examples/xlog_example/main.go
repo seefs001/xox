@@ -20,6 +20,8 @@ func main() {
 	// Set console format to put source at the beginning, followed by level, then time
 	xlog.SetConsoleFormat("%s[%l] [%t] %m%a")
 
+	xlog.Info("This is an info message", slog.String("key", "value"), slog.Int("int", 123), slog.Any("any", "any"))
+
 	// Use the default console logger
 	xlog.Info("This is an info message")
 	xlog.Warn("This is a warning message")
