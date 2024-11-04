@@ -694,27 +694,42 @@ type ShutdownHandler interface {
 }
 
 // Shutdown shuts down all handlers that implement the ShutdownHandler interface.
-func Shutdown() error {
+// If ctx is nil, it will use context.Background().
+func Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
-	var errs []error
-	for _, handler := range handlers {
-		if closer, ok := handler.(ShutdownHandler); ok {
-			if err := closer.Shutdown(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to shutdown handler: %w", err))
+	done := make(chan error, 1)
+	go func() {
+		var errs []error
+		for _, handler := range handlers {
+			if closer, ok := handler.(ShutdownHandler); ok {
+				if err := closer.Shutdown(); err != nil {
+					errs = append(errs, fmt.Errorf("failed to shutdown handler: %w", err))
+				}
+			}
+			if closer, ok := handler.(io.Closer); ok {
+				if err := closer.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("failed to close handler: %w", err))
+				}
 			}
 		}
-		if closer, ok := handler.(io.Closer); ok {
-			if err := closer.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to close handler: %w", err))
-			}
+		if len(errs) > 0 {
+			done <- xerror.Errorf("failed to shutdown one or more handlers: %v", errs)
 		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return xerror.Errorf("shutdown timeout: %v", ctx.Err())
 	}
-	if len(errs) > 0 {
-		return xerror.Errorf("failed to shutdown one or more handlers: %v", errs)
-	}
-	return nil
 }
 
 // SetLogger sets the default logger

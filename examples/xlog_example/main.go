@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -89,9 +90,10 @@ func main() {
 		// Wait for interrupt signal
 		<-sigChan
 		xlog.Info("Shutting down application")
-
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		// Perform shutdown tasks
-		if err := xlog.Shutdown(); err != nil {
+		if err := xlog.Shutdown(ctx); err != nil {
 			xlog.Error("Failed to shutdown logger", "error", err)
 		}
 
