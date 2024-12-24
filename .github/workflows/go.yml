@@ -27,5 +27,9 @@ jobs:
       timeout-minutes: 5  # set timeout to 5 minutes
 
     - name: Test
-      run: go test -race -v ./...
+      run: go test -race -v $(go list ./... | grep -v xedb)
+      timeout-minutes: 3  # set timeout to 3 minutes
+
+    - name: Test with race detector
+      run: go test -race -v $(go list ./... | grep -v xedb)
       timeout-minutes: 3  # set timeout to 3 minutes
