@@ -2,6 +2,7 @@ package xlog_test
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -65,8 +66,10 @@ func TestRotatingFileHandler(t *testing.T) {
 		xlog.Error("This is an error message")
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	// Force flush and rotation
-	err = xlog.Shutdown()
+	err = xlog.Shutdown(ctx)
 	if err != nil {
 		t.Fatalf("Failed to shutdown: %v", err)
 	}
@@ -149,7 +152,9 @@ func TestShutdown(t *testing.T) {
 	// Wait for logs to be written and flushed
 	time.Sleep(2 * time.Second)
 
-	err = xlog.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = xlog.Shutdown(ctx)
 	assert.NoError(err, "Shutdown should not return an error")
 
 	// Wait a bit more after shutdown

@@ -30,3 +30,4 @@ app.*
 logs/
 *.log
 xconfig/*.json
+.replit
