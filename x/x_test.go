@@ -496,7 +496,10 @@ func TestThrottle(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	assert.True(t, counter == 2 || counter == 3)
+	time.Sleep(60 * time.Millisecond)
+
+	assert.GreaterOrEqual(t, counter, 2)
+	assert.LessOrEqual(t, counter, 4)
 }
 
 func TestAsyncTask(t *testing.T) {

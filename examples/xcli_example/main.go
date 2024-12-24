@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 func main() {
+	xlog.SetDefaultLogLevel(slog.LevelError)
 	xlog.Info("Starting CLI application example")
 
 	// Create the app

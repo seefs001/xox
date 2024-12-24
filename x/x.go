@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2434,8 +2435,16 @@ func ForEachMapWithError[K comparable, V any](m map[K]V, action func(K, V) error
 	if m == nil || action == nil {
 		return nil
 	}
-	for k, v := range m {
-		if err := action(k, v); err != nil {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j])
+	})
+
+	for _, k := range keys {
+		if err := action(k, m[k]); err != nil {
 			return xerror.Wrapf(err, "error processing map entry with key %v", k)
 		}
 	}
