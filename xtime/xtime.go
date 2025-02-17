@@ -1,7 +1,6 @@
 package xtime
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -177,18 +176,18 @@ func ParseDuration(s string) (time.Duration, error) {
 	}
 
 	var d time.Duration
-	var err error
 	s = strings.TrimSpace(s)
 
 	for s != "" {
 		var v int64
 		var unit string
+		var err error
 
 		if v, s, err = nextNumber(s); err != nil {
-			return 0, err
+			return 0, xerror.Wrap(err, "failed to parse number")
 		}
 		if unit, s = nextUnit(s); unit == "" {
-			return 0, fmt.Errorf("missing unit in duration %q", s)
+			return 0, xerror.New("missing unit in duration")
 		}
 
 		switch unit {
@@ -201,60 +200,92 @@ func ParseDuration(s string) (time.Duration, error) {
 		case "d":
 			d += time.Duration(v) * Day
 		case "h":
-			d += time.Duration(v) * time.Hour
+			d += time.Duration(v) * Hour
 		case "m":
-			d += time.Duration(v) * time.Minute
+			d += time.Duration(v) * Minute
 		case "s":
-			d += time.Duration(v) * time.Second
+			d += time.Duration(v) * Second
 		default:
-			return 0, fmt.Errorf("unknown unit %q in duration %q", unit, s)
+			return 0, xerror.Newf("invalid unit %q in duration", unit)
 		}
 	}
 
 	return d, nil
 }
 
+// nextNumber extracts the next number from the duration string
 func nextNumber(s string) (int64, string, error) {
 	i := 0
-	for ; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	s = s[i:]
+	if len(s) == 0 {
+		return 0, "", xerror.New("empty number")
+	}
+
+	i = 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9') {
+		i++
 	}
 	if i == 0 {
-		return 0, s, errors.New("invalid syntax")
+		return 0, "", xerror.New("invalid number format")
 	}
+
 	n, err := strconv.ParseInt(s[:i], 10, 64)
 	if err != nil {
-		return 0, s, err
+		return 0, "", xerror.Wrap(err, "failed to parse number")
 	}
+	if n < 0 {
+		return 0, "", xerror.New("negative duration not allowed")
+	}
+
 	return n, s[i:], nil
 }
 
+// nextUnit extracts the next unit from the duration string
 func nextUnit(s string) (string, string) {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	s = s[i:]
 	if len(s) == 0 {
 		return "", ""
 	}
-	return s[:1], s[1:]
+
+	switch s[0] {
+	case 'y', 'M', 'w', 'd', 'h', 'm', 's':
+		return string(s[0]), s[1:]
+	default:
+		return "", s
+	}
 }
 
 // AddDate adds the specified number of years, months, and days to the given time
 func AddDate(t time.Time, years, months, days int) time.Time {
+	if t.IsZero() {
+		return t
+	}
 	return t.AddDate(years, months, days)
 }
 
 // DaysBetween calculates the number of days between two dates
+// The result is always positive, regardless of the order of dates
 func DaysBetween(a, b time.Time) int {
 	if a.IsZero() || b.IsZero() {
 		return 0
 	}
-	if a.Location() != b.Location() {
-		b = b.In(a.Location())
+
+	// Normalize both times to start of day in UTC to ensure accurate day calculation
+	aDay := StartOfDay(a).UTC()
+	bDay := StartOfDay(b).UTC()
+
+	days := int(bDay.Sub(aDay).Hours() / 24)
+	if days < 0 {
+		days = -days
 	}
-	if a.After(b) {
-		a, b = b, a
-	}
-	return int(b.Sub(a).Hours() / 24)
+	return days
 }
 
 // IsSameDay checks if two times are on the same day
@@ -262,19 +293,53 @@ func IsSameDay(a, b time.Time) bool {
 	if a.IsZero() || b.IsZero() {
 		return false
 	}
-	if a.Location() != b.Location() {
-		b = b.In(a.Location())
-	}
-	y1, m1, d1 := a.Date()
-	y2, m2, d2 := b.Date()
-	return y1 == y2 && m1 == m2 && d1 == d2
+	return a.Year() == b.Year() && a.Month() == b.Month() && a.Day() == b.Day()
 }
 
 // TimeIn returns the time in the specified timezone
 func TimeIn(t time.Time, name string) (time.Time, error) {
+	if t.IsZero() {
+		return t, nil
+	}
+
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return t, err
+		return time.Time{}, xerror.Wrapf(err, "failed to load timezone %q", name)
 	}
 	return t.In(loc), nil
+}
+
+// IsWeekend checks if the given time falls on a weekend (Saturday or Sunday)
+func IsWeekend(t time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	weekday := t.Weekday()
+	return weekday == time.Saturday || weekday == time.Sunday
+}
+
+// Quarter returns the quarter (1-4) for the given time
+func Quarter(t time.Time) int {
+	if t.IsZero() {
+		return 0
+	}
+	return int(t.Month()-1)/3 + 1
+}
+
+// StartOfQuarter returns the start of the quarter for the given time
+func StartOfQuarter(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	quarter := Quarter(t)
+	month := time.Month((quarter-1)*3 + 1)
+	return time.Date(t.Year(), month, 1, 0, 0, 0, 0, t.Location())
+}
+
+// EndOfQuarter returns the end of the quarter for the given time
+func EndOfQuarter(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	return StartOfQuarter(t).AddDate(0, 3, 0).Add(-time.Nanosecond)
 }
