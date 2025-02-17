@@ -27,6 +27,11 @@ var (
 	handlers       []slog.Handler
 	mu             sync.RWMutex // Added mutex for thread-safe access
 	reqIDCounter   uint64
+	bufferPool     = sync.Pool{
+		New: func() interface{} {
+			return new(strings.Builder)
+		},
+	}
 )
 
 // LogConfig represents the configuration for logging.
@@ -191,20 +196,29 @@ func log(level slog.Level, msg string, args ...any) {
 	mu.RLock()
 	defer mu.RUnlock()
 
+	ctx := context.Background()
+	reqID := GenReqID()
+	ctx = WithReqID(ctx, reqID)
+
 	if logConfig.IncludeFileAndLine {
 		_, file, line, ok := runtime.Caller(2)
 		if ok {
 			// Use relative path for file
-			rel, err := filepath.Rel(filepath.Dir(file), file)
-			if err == nil {
+			if rel, err := filepath.Rel(filepath.Dir(file), file); err == nil {
 				file = rel
 			}
-			// Format file:line to be clickable in most IDEs
-			fileInfo := fmt.Sprintf("%s:%d", file, line)
-			args = append(args, "source", fileInfo)
+			// Get buffer from pool
+			buf := bufferPool.Get().(*strings.Builder)
+			buf.Reset()
+			defer bufferPool.Put(buf)
+
+			buf.WriteString(fmt.Sprintf("%s:%d", file, line))
+			args = append(args, "source", buf.String())
 		}
 	}
-	defaultLogger.Log(context.Background(), level, msg, args...)
+
+	args = append(args, "req_id", reqID)
+	defaultLogger.Log(ctx, level, msg, args...)
 }
 
 // ColorConsoleHandler implements a color console handler.
@@ -424,6 +438,72 @@ func (h *MultiHandler) WithGroup(name string) slog.Handler {
 	return NewMultiHandler(handlers...)
 }
 
+// LogEntry represents a structured log entry
+type LogEntry struct {
+	Time     time.Time
+	Level    slog.Level
+	Message  string
+	ReqID    string
+	Source   string
+	Fields   map[string]interface{}
+	Error    error
+}
+
+// NewLogEntry creates a new log entry
+func NewLogEntry(level slog.Level, msg string) *LogEntry {
+	return &LogEntry{
+		Time:    time.Now(),
+		Level:   level,
+		Message: msg,
+		Fields:  make(map[string]interface{}),
+	}
+}
+
+// WithField adds a field to the log entry
+func (e *LogEntry) WithField(key string, value interface{}) *LogEntry {
+	e.Fields[key] = value
+	return e
+}
+
+// WithError adds an error to the log entry
+func (e *LogEntry) WithError(err error) *LogEntry {
+	e.Error = err
+	if err != nil {
+		e.Fields["error"] = err.Error()
+	}
+	return e
+}
+
+// WithReqID adds a request ID to the log entry
+func (e *LogEntry) WithReqID(reqID string) *LogEntry {
+	e.ReqID = reqID
+	return e
+}
+
+// WithSource adds source information to the log entry
+func (e *LogEntry) WithSource(source string) *LogEntry {
+	e.Source = source
+	return e
+}
+
+// Log logs the entry
+func (e *LogEntry) Log() {
+	args := make([]interface{}, 0, len(e.Fields)*2+4)
+	
+	if e.ReqID != "" {
+		args = append(args, "req_id", e.ReqID)
+	}
+	if e.Source != "" {
+		args = append(args, "source", e.Source)
+	}
+	
+	for k, v := range e.Fields {
+		args = append(args, k, v)
+	}
+	
+	log(e.Level, e.Message, args...)
+}
+
 // FileConfig represents the configuration for file logging.
 type FileConfig struct {
 	Filename   string
@@ -486,31 +566,57 @@ func NewRotatingFileHandler(config FileConfig) (*RotatingFileHandler, error) {
 
 // Handle handles the log record.
 func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
+	if !h.Enabled(ctx, r.Level) {
+		return nil
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.file == nil {
-		if err := h.rotate(); err != nil {
-			return err
-		}
+	if h.closed {
+		return xerror.New("handler is closed")
 	}
 
-	if h.shouldRotate() {
-		if err := h.rotate(); err != nil {
-			return err
-		}
-	}
+	// Format the log entry first to get its size
+	buf := bufferPool.Get().(*strings.Builder)
+	buf.Reset()
+	defer bufferPool.Put(buf)
 
-	err := h.Handler.Handle(ctx, r)
-	if err != nil {
-		return err
-	}
+	// Format log entry
+	fmt.Fprintf(buf, "[%s] %s %s\n", 
+		r.Time.Format("2006-01-02 15:04:05.000"),
+		r.Level.String(),
+		r.Message)
 
-	h.size += int64(len(r.Message))
 	r.Attrs(func(a slog.Attr) bool {
-		h.size += int64(len(a.Key) + len(a.Value.String()))
+		fmt.Fprintf(buf, "\t%s=%v\n", a.Key, a.Value)
 		return true
 	})
+
+	logEntry := buf.String()
+	entrySize := int64(len(logEntry))
+
+	// Check if we need to rotate before writing
+	if h.size+entrySize > h.config.MaxSize {
+		if err := h.rotate(); err != nil {
+			return xerror.Wrap(err, "failed to rotate log file")
+		}
+	}
+
+	if _, err := h.buffer.WriteString(logEntry); err != nil {
+		return xerror.Wrap(err, "failed to write to buffer")
+	}
+
+	h.size += entrySize
+	h.writeCount++
+
+	// Flush buffer if we've written enough entries
+	if h.writeCount >= 100 || h.size >= h.config.MaxSize {
+		if err := h.buffer.Flush(); err != nil {
+			return xerror.Wrap(err, "failed to flush buffer")
+		}
+		h.writeCount = 0
+	}
 
 	return nil
 }
@@ -538,14 +644,26 @@ func (h *RotatingFileHandler) run() {
 
 // shouldRotate checks if the file should be rotated
 func (h *RotatingFileHandler) shouldRotate() bool {
-	return h.size >= h.config.MaxSize || !isSameDay(h.lastRotate, time.Now()) || h.writeCount >= 10
-}
+	if h.file == nil {
+		return true
+	}
 
-// isSameDay checks if two times are on the same day.
-func isSameDay(t1, t2 time.Time) bool {
-	y1, m1, d1 := t1.Date()
-	y2, m2, d2 := t2.Date()
-	return y1 == y2 && m1 == m2 && d1 == d2
+	// Check size-based rotation
+	if h.config.MaxSize > 0 && h.size >= h.config.MaxSize {
+		return true
+	}
+
+	// Check time-based rotation (daily)
+	if !isSameDay(time.Now(), h.lastRotate) {
+		return true
+	}
+
+	// Check if file has been deleted or moved
+	if _, err := os.Stat(h.config.Filename); os.IsNotExist(err) {
+		return true
+	}
+
+	return false
 }
 
 // updateFileSize updates the current file size
@@ -560,39 +678,66 @@ func (h *RotatingFileHandler) rotate() error {
 	if h.file != nil {
 		if h.buffer != nil {
 			if err := h.buffer.Flush(); err != nil {
-				return xerror.Wrap(err, "failed to flush buffer")
+				return xerror.Wrap(err, "failed to flush buffer before rotation")
 			}
 		}
 		if err := h.file.Close(); err != nil {
-			return xerror.Wrap(err, "failed to close file")
+			return xerror.Wrap(err, "failed to close file before rotation")
 		}
 	}
 
-	dir := filepath.Dir(h.config.Filename)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return xerror.Wrap(err, "failed to create directory")
+	if err := h.rotateFile(); err != nil {
+		return xerror.Wrap(err, "failed to rotate file")
 	}
 
-	ext := filepath.Ext(h.config.Filename)
-	base := filepath.Base(h.config.Filename)
-	base = strings.TrimSuffix(base, ext)
-
-	timestamp := time.Now().Format("20060102150405")
-	filename := fmt.Sprintf("%s.%s.%d%s", base, timestamp, h.currentNum, ext)
-	fullPath := filepath.Join(dir, filename)
-
-	newFile, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(h.config.Filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return xerror.Wrap(err, "failed to open new log file")
 	}
 
-	h.file = newFile
-	h.buffer = bufio.NewWriterSize(h.file, 32*1024)
+	h.file = file
+	h.buffer = bufio.NewWriterSize(file, 32*1024) // 32KB buffer
 	h.size = 0
 	h.lastRotate = time.Now()
-	h.currentNum++
 	h.writeCount = 0
 
+	return nil
+}
+
+// rotateFile rotates the log file.
+func (h *RotatingFileHandler) rotateFile() error {
+	if _, err := os.Stat(h.config.Filename); os.IsNotExist(err) {
+		return nil
+	}
+
+	now := time.Now()
+	ext := filepath.Ext(h.config.Filename)
+	base := strings.TrimSuffix(filepath.Base(h.config.Filename), ext)
+	dir := filepath.Dir(h.config.Filename)
+	
+	// Create a unique name with timestamp and counter
+	newName := filepath.Join(dir, fmt.Sprintf("%s.%s.%03d%s", 
+		base,
+		now.Format("20060102150405"),
+		h.currentNum,
+		ext))
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return xerror.Wrap(err, "failed to create directory")
+	}
+
+	// Rename the current file
+	if err := os.Rename(h.config.Filename, newName); err != nil {
+		return xerror.Wrap(err, "failed to rename log file")
+	}
+
+	h.currentNum++
+	if h.currentNum > h.config.MaxBackups {
+		h.currentNum = 0
+	}
+
+	// Cleanup old files asynchronously
 	go h.removeOldFiles()
 
 	return nil
@@ -700,35 +845,40 @@ func Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	var errs []error
+	var wg sync.WaitGroup
 
-	done := make(chan error, 1)
+	mu.RLock()
+	for _, handler := range handlers {
+		if sh, ok := handler.(ShutdownHandler); ok {
+			wg.Add(1)
+			go func(h ShutdownHandler) {
+				defer wg.Done()
+				if err := h.Shutdown(); err != nil {
+					mu.Lock()
+					errs = append(errs, err)
+					mu.Unlock()
+				}
+			}(sh)
+		}
+	}
+	mu.RUnlock()
+
+	// Wait with context timeout
+	done := make(chan struct{})
 	go func() {
-		var errs []error
-		for _, handler := range handlers {
-			if closer, ok := handler.(ShutdownHandler); ok {
-				if err := closer.Shutdown(); err != nil {
-					errs = append(errs, fmt.Errorf("failed to shutdown handler: %w", err))
-				}
-			}
-			if closer, ok := handler.(io.Closer); ok {
-				if err := closer.Close(); err != nil {
-					errs = append(errs, fmt.Errorf("failed to close handler: %w", err))
-				}
-			}
-		}
-		if len(errs) > 0 {
-			done <- xerror.Errorf("failed to shutdown one or more handlers: %v", errs)
-		}
-		done <- nil
+		wg.Wait()
+		close(done)
 	}()
 
 	select {
-	case err := <-done:
-		return err
 	case <-ctx.Done():
-		return xerror.Errorf("shutdown timeout: %v", ctx.Err())
+		return xerror.Wrap(ctx.Err(), "shutdown timeout")
+	case <-done:
+		if len(errs) > 0 {
+			return xerror.Wrap(errs[0], "shutdown error")
+		}
+		return nil
 	}
 }
 
@@ -948,4 +1098,34 @@ func logContext(ctx context.Context, level slog.Level, msg string, args ...any) 
 func GenReqID() string {
 	id := atomic.AddUint64(&reqIDCounter, 1)
 	return fmt.Sprintf("req-%d-%d", time.Now().UnixNano(), id)
+}
+
+// contextKey is a type for context keys
+type contextKey int
+
+const (
+	reqIDKey contextKey = iota
+)
+
+// WithReqID adds a request ID to the context
+func WithReqID(ctx context.Context, reqID string) context.Context {
+	return context.WithValue(ctx, reqIDKey, reqID)
+}
+
+// GetReqID gets the request ID from context
+func GetReqID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if reqID, ok := ctx.Value(reqIDKey).(string); ok {
+		return reqID
+	}
+	return ""
+}
+
+// isSameDay checks if two times are on the same day.
+func isSameDay(t1, t2 time.Time) bool {
+	y1, m1, d1 := t1.Date()
+	y2, m2, d2 := t2.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
 }
