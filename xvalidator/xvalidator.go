@@ -6,24 +6,45 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// Validator represents a validation function
-type Validator func(interface{}) error
+var (
+	emailRegex    = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	alphaRegex    = regexp.MustCompile(`^[a-zA-Z]+$`)
+	alphanumRegex = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+	numericRegex  = regexp.MustCompile(`^[0-9]+$`)
+	regexpCache   = &sync.Map{}
+)
 
 // ValidationError represents an error that occurred during validation
 type ValidationError struct {
-	Field   string
-	Message string
+	Field      string
+	Message    string
+	NestedPath string
 }
 
 func (e ValidationError) Error() string {
+	if e.NestedPath != "" {
+		return fmt.Sprintf("%s.%s: %s", e.NestedPath, e.Field, e.Message)
+	}
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// ValidateOptions contains options for validation
+type ValidateOptions struct {
+	StopOnFirst bool
+	NestedPath  string
 }
 
 // Validate performs validation on a struct or pointer to struct
 func Validate(v interface{}) []error {
+	return ValidateWithOptions(v, ValidateOptions{})
+}
+
+// ValidateWithOptions performs validation with custom options
+func ValidateWithOptions(v interface{}, opts ValidateOptions) []error {
 	if v == nil {
 		return []error{fmt.Errorf("validation target is nil")}
 	}
@@ -50,6 +71,22 @@ func Validate(v interface{}) []error {
 		tag := field.Tag.Get("xv")
 
 		if tag == "" {
+			// Check for nested struct
+			if value.Kind() == reflect.Struct || (value.Kind() == reflect.Ptr && !value.IsNil() && value.Elem().Kind() == reflect.Struct) {
+				nestedPath := field.Name
+				if opts.NestedPath != "" {
+					nestedPath = opts.NestedPath + "." + nestedPath
+				}
+				if nestedErrors := ValidateWithOptions(value.Interface(), ValidateOptions{
+					StopOnFirst: opts.StopOnFirst,
+					NestedPath:  nestedPath,
+				}); nestedErrors != nil {
+					errors = append(errors, nestedErrors...)
+					if opts.StopOnFirst && len(errors) > 0 {
+						return errors
+					}
+				}
+			}
 			continue
 		}
 
@@ -59,6 +96,7 @@ func Validate(v interface{}) []error {
 			if validator == "" {
 				continue
 			}
+
 			parts := strings.SplitN(validator, "=", 2)
 			validatorName := strings.TrimSpace(parts[0])
 			var validatorArg string
@@ -66,8 +104,11 @@ func Validate(v interface{}) []error {
 				validatorArg = strings.TrimSpace(parts[1])
 			}
 
-			if err := applyValidator(validatorName, validatorArg, field.Name, value.Interface()); err != nil {
+			if err := applyValidator(validatorName, validatorArg, field.Name, value.Interface(), opts.NestedPath); err != nil {
 				errors = append(errors, err)
+				if opts.StopOnFirst {
+					return errors
+				}
 			}
 		}
 	}
@@ -78,39 +119,56 @@ func Validate(v interface{}) []error {
 	return errors
 }
 
-func applyValidator(name, arg, fieldName string, value interface{}) error {
+func applyValidator(name, arg, fieldName string, value interface{}, nestedPath string) error {
 	if name == "" {
 		return fmt.Errorf("empty validator name for field %s", fieldName)
 	}
 
+	var err error
 	switch name {
 	case "required":
-		return required(fieldName, value)
+		err = required(fieldName, value)
 	case "min":
-		return min(fieldName, value, arg)
+		err = min(fieldName, value, arg)
 	case "max":
-		return max(fieldName, value, arg)
+		err = max(fieldName, value, arg)
 	case "email":
-		return email(fieldName, value)
+		err = email(fieldName, value)
 	case "regexp":
-		return regexpValidator(fieldName, value, arg)
+		err = regexpValidator(fieldName, value, arg)
 	case "len":
-		return length(fieldName, value, arg)
+		err = length(fieldName, value, arg)
 	case "in":
-		return in(fieldName, value, arg)
+		err = in(fieldName, value, arg)
 	case "notin":
-		return notIn(fieldName, value, arg)
+		err = notIn(fieldName, value, arg)
 	case "alpha":
-		return alpha(fieldName, value)
+		err = alpha(fieldName, value)
 	case "alphanum":
-		return alphanumeric(fieldName, value)
+		err = alphanumeric(fieldName, value)
 	case "numeric":
-		return numeric(fieldName, value)
+		err = numeric(fieldName, value)
 	case "datetime":
-		return datetime(fieldName, value, arg)
+		err = datetime(fieldName, value, arg)
+	case "url":
+		err = url(fieldName, value)
+	case "uuid":
+		err = uuid(fieldName, value)
+	case "ipv4":
+		err = ipv4(fieldName, value)
+	case "ipv6":
+		err = ipv6(fieldName, value)
 	default:
-		return fmt.Errorf("unknown validator: %s for field %s", name, fieldName)
+		err = fmt.Errorf("unknown validator: %s for field %s", name, fieldName)
 	}
+
+	if err != nil {
+		if ve, ok := err.(ValidationError); ok && nestedPath != "" {
+			ve.NestedPath = nestedPath
+			return ve
+		}
+	}
+	return err
 }
 
 func required(field string, value interface{}) error {
@@ -223,16 +281,13 @@ func max(field string, value interface{}, arg string) error {
 func email(field string, value interface{}) error {
 	str, ok := value.(string)
 	if !ok {
-		if v := reflect.ValueOf(value); v.Kind() == reflect.Ptr && !v.IsNil() && v.Elem().Kind() == reflect.String {
-			str = v.Elem().String()
-		} else {
-			return fmt.Errorf("email validator requires a string for field %s", field)
-		}
+		return ValidationError{Field: field, Message: "Must be a string"}
 	}
+
 	if str == "" {
 		return nil
 	}
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
 	if !emailRegex.MatchString(str) {
 		return ValidationError{Field: field, Message: "Invalid email format"}
 	}
@@ -240,23 +295,29 @@ func email(field string, value interface{}) error {
 }
 
 func regexpValidator(field string, value interface{}, pattern string) error {
-	if pattern == "" {
-		return fmt.Errorf("regexp validator requires a pattern for field %s", field)
-	}
-
 	str, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("regexp validator requires a string for field %s", field)
+		return ValidationError{Field: field, Message: "Must be a string"}
 	}
+
 	if str == "" {
-		return nil // Allow empty string unless required is also specified
+		return nil
 	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return fmt.Errorf("invalid regexp pattern: %s for field %s", pattern, field)
+
+	var regex *regexp.Regexp
+	if cached, ok := regexpCache.Load(pattern); ok {
+		regex = cached.(*regexp.Regexp)
+	} else {
+		var err error
+		regex, err = regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("invalid regexp pattern: %s for field %s: %v", pattern, field, err)
+		}
+		regexpCache.Store(pattern, regex)
 	}
-	if !re.MatchString(str) {
-		return ValidationError{Field: field, Message: fmt.Sprintf("Does not match pattern %s", pattern)}
+
+	if !regex.MatchString(str) {
+		return ValidationError{Field: field, Message: fmt.Sprintf("Does not match pattern: %s", pattern)}
 	}
 	return nil
 }
@@ -355,12 +416,11 @@ func notIn(field string, value interface{}, arg string) error {
 func alpha(field string, value interface{}) error {
 	str, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("alpha validator requires a string for field %s", field)
+		return ValidationError{Field: field, Message: "Must be a string"}
 	}
 	if str == "" {
 		return nil // Allow empty string unless required is also specified
 	}
-	alphaRegex := regexp.MustCompile(`^[a-zA-Z]+$`)
 	if !alphaRegex.MatchString(str) {
 		return ValidationError{Field: field, Message: "Must contain only alphabetic characters"}
 	}
@@ -370,12 +430,11 @@ func alpha(field string, value interface{}) error {
 func alphanumeric(field string, value interface{}) error {
 	str, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("alphanum validator requires a string for field %s", field)
+		return ValidationError{Field: field, Message: "Must be a string"}
 	}
 	if str == "" {
 		return nil // Allow empty string unless required is also specified
 	}
-	alphanumRegex := regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 	if !alphanumRegex.MatchString(str) {
 		return ValidationError{Field: field, Message: "Must contain only alphanumeric characters"}
 	}
@@ -409,13 +468,89 @@ func datetime(field string, value interface{}, layout string) error {
 
 	str, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("datetime validator requires a string for field %s", field)
+		return ValidationError{Field: field, Message: "Must be a string"}
 	}
 	if str == "" {
 		return nil // Allow empty string unless required is also specified
 	}
 	if _, err := time.Parse(layout, str); err != nil {
 		return ValidationError{Field: field, Message: fmt.Sprintf("Must be a valid datetime in the format %s", layout)}
+	}
+	return nil
+}
+
+func url(field string, value interface{}) error {
+	str, ok := value.(string)
+	if !ok {
+		return ValidationError{Field: field, Message: "Must be a string"}
+	}
+
+	if str == "" {
+		return nil
+	}
+
+	urlRegex := regexp.MustCompile(`^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$`)
+	if !urlRegex.MatchString(str) {
+		return ValidationError{Field: field, Message: "Invalid URL format"}
+	}
+	return nil
+}
+
+func uuid(field string, value interface{}) error {
+	str, ok := value.(string)
+	if !ok {
+		return ValidationError{Field: field, Message: "Must be a string"}
+	}
+
+	if str == "" {
+		return nil
+	}
+
+	uuidRegex := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	if !uuidRegex.MatchString(strings.ToLower(str)) {
+		return ValidationError{Field: field, Message: "Invalid UUID format"}
+	}
+	return nil
+}
+
+func ipv4(field string, value interface{}) error {
+	str, ok := value.(string)
+	if !ok {
+		return ValidationError{Field: field, Message: "Must be a string"}
+	}
+
+	if str == "" {
+		return nil
+	}
+
+	ipv4Regex := regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
+	if !ipv4Regex.MatchString(str) {
+		return ValidationError{Field: field, Message: "Invalid IPv4 format"}
+	}
+
+	parts := strings.Split(str, ".")
+	for _, part := range parts {
+		num, err := strconv.Atoi(part)
+		if err != nil || num < 0 || num > 255 {
+			return ValidationError{Field: field, Message: "Invalid IPv4 format"}
+		}
+	}
+	return nil
+}
+
+func ipv6(field string, value interface{}) error {
+	str, ok := value.(string)
+	if !ok {
+		return ValidationError{Field: field, Message: "Must be a string"}
+	}
+
+	if str == "" {
+		return nil
+	}
+
+	ipv6Regex := regexp.MustCompile(`^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|::(ffff(:0{1,4})?:)?((25[0-5]|(2[0-4]|1?[0-9])?[0-9])\.){3}(25[0-5]|(2[0-4]|1?[0-9])?[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1?[0-9])?[0-9])\.){3}(25[0-5]|(2[0-4]|1?[0-9])?[0-9]))$`)
+	if !ipv6Regex.MatchString(str) {
+		return ValidationError{Field: field, Message: "Invalid IPv6 format"}
 	}
 	return nil
 }
