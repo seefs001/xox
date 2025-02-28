@@ -440,13 +440,13 @@ func (h *MultiHandler) WithGroup(name string) slog.Handler {
 
 // LogEntry represents a structured log entry
 type LogEntry struct {
-	Time     time.Time
-	Level    slog.Level
-	Message  string
-	ReqID    string
-	Source   string
-	Fields   map[string]interface{}
-	Error    error
+	Time    time.Time
+	Level   slog.Level
+	Message string
+	ReqID   string
+	Source  string
+	Fields  map[string]interface{}
+	Error   error
 }
 
 // NewLogEntry creates a new log entry
@@ -489,18 +489,18 @@ func (e *LogEntry) WithSource(source string) *LogEntry {
 // Log logs the entry
 func (e *LogEntry) Log() {
 	args := make([]interface{}, 0, len(e.Fields)*2+4)
-	
+
 	if e.ReqID != "" {
 		args = append(args, "req_id", e.ReqID)
 	}
 	if e.Source != "" {
 		args = append(args, "source", e.Source)
 	}
-	
+
 	for k, v := range e.Fields {
 		args = append(args, k, v)
 	}
-	
+
 	log(e.Level, e.Message, args...)
 }
 
@@ -583,7 +583,7 @@ func (h *RotatingFileHandler) Handle(ctx context.Context, r slog.Record) error {
 	defer bufferPool.Put(buf)
 
 	// Format log entry
-	fmt.Fprintf(buf, "[%s] %s %s\n", 
+	fmt.Fprintf(buf, "[%s] %s %s\n",
 		r.Time.Format("2006-01-02 15:04:05.000"),
 		r.Level.String(),
 		r.Message)
@@ -714,9 +714,9 @@ func (h *RotatingFileHandler) rotateFile() error {
 	ext := filepath.Ext(h.config.Filename)
 	base := strings.TrimSuffix(filepath.Base(h.config.Filename), ext)
 	dir := filepath.Dir(h.config.Filename)
-	
+
 	// Create a unique name with timestamp and counter
-	newName := filepath.Join(dir, fmt.Sprintf("%s.%s.%03d%s", 
+	newName := filepath.Join(dir, fmt.Sprintf("%s.%s.%03d%s",
 		base,
 		now.Format("20060102150405"),
 		h.currentNum,
@@ -734,7 +734,7 @@ func (h *RotatingFileHandler) rotateFile() error {
 
 	h.currentNum++
 	if h.currentNum > h.config.MaxBackups {
-		h.currentNum = 0
+		h.currentNum = 1
 	}
 
 	// Cleanup old files asynchronously
@@ -745,19 +745,52 @@ func (h *RotatingFileHandler) rotateFile() error {
 
 // removeOldFiles removes files older than MaxAge
 func (h *RotatingFileHandler) removeOldFiles() {
-	if h.config.MaxAge > 0 {
-		cutoff := time.Now().AddDate(0, 0, -h.config.MaxAge)
-		dir := filepath.Dir(h.config.Filename)
-		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				if strings.HasPrefix(filepath.Base(path), filepath.Base(h.config.Filename)) {
-					if info.ModTime().Before(cutoff) {
-						os.Remove(path) // Ignore errors
-					}
-				}
+	if h.config.MaxAge <= 0 {
+		return
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -h.config.MaxAge)
+	dir := filepath.Dir(h.config.Filename)
+	base := filepath.Base(h.config.Filename)
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		Error("Failed to read log directory", "error", err, "dir", dir)
+		return
+	}
+
+	for _, file := range files {
+		// Skip directories
+		if file.IsDir() {
+			continue
+		}
+
+		// Check if file is a log backup by checking if it starts with the base filename
+		if !strings.HasPrefix(file.Name(), strings.TrimSuffix(base, filepath.Ext(base))) {
+			continue
+		}
+
+		filePath := filepath.Join(dir, file.Name())
+
+		// Don't delete the current log file
+		if filePath == h.config.Filename {
+			continue
+		}
+
+		// Check file age
+		fileInfo, err := file.Info()
+		if err != nil {
+			Warn("Failed to get file info", "file", filePath, "error", err)
+			continue
+		}
+
+		if fileInfo.ModTime().Before(cutoff) {
+			if err := os.Remove(filePath); err != nil {
+				Warn("Failed to remove old log file", "file", filePath, "error", err)
+			} else {
+				Debug("Removed old log file", "file", filePath)
 			}
-			return nil
-		})
+		}
 	}
 }
 
@@ -930,7 +963,12 @@ func NewFixedFileHandler(filename string, level slog.Level) (*FixedFileHandler, 
 func (h *FixedFileHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.Handler.Handle(ctx, r)
+	err := h.Handler.Handle(ctx, r)
+	if err != nil {
+		return err
+	}
+	// Immediately flush to ensure logs are written to disk
+	return h.buffer.Flush()
 }
 
 // Close closes the FixedFileHandler.
@@ -1080,6 +1118,12 @@ func logContext(ctx context.Context, level slog.Level, msg string, args ...any) 
 	mu.RLock()
 	defer mu.RUnlock()
 
+	processedArgs := processArgs(args...)
+	reqID := GetReqID(ctx)
+	if reqID != "" {
+		processedArgs = append(processedArgs, "req_id", reqID)
+	}
+
 	if logConfig.IncludeFileAndLine {
 		_, file, line, ok := runtime.Caller(2)
 		if ok {
@@ -1088,10 +1132,23 @@ func logContext(ctx context.Context, level slog.Level, msg string, args ...any) 
 				file = rel
 			}
 			fileInfo := fmt.Sprintf("%s:%d", file, line)
-			args = append(args, "source", fileInfo)
+			processedArgs = append(processedArgs, "source", fileInfo)
 		}
 	}
-	defaultLogger.LogAttrs(ctx, level, msg, slog.Any("args", args))
+
+	// Convert to slog.Attr slice
+	attrs := make([]slog.Attr, 0, len(processedArgs)/2)
+	for i := 0; i < len(processedArgs); i += 2 {
+		if i+1 < len(processedArgs) {
+			key, ok := processedArgs[i].(string)
+			if !ok {
+				key = fmt.Sprintf("%v", processedArgs[i])
+			}
+			attrs = append(attrs, slog.Any(key, processedArgs[i+1]))
+		}
+	}
+
+	defaultLogger.LogAttrs(ctx, level, msg, attrs...)
 }
 
 // GenReqID generates a unique request ID

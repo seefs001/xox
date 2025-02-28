@@ -85,16 +85,30 @@ func (a *App) AddCommand(cmd *Command) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 
-	if _, exists := a.Commands[cmd.Name]; !exists {
-		if a.Commands == nil {
-			a.Commands = make(map[string]*Command)
+	if a.Commands == nil {
+		a.Commands = make(map[string]*Command)
+	}
+
+	// Check if the command or any of its aliases already exist
+	if existing, exists := a.Commands[cmd.Name]; exists && existing != cmd {
+		xlog.Warnf("Command with name '%s' already exists, skipping", cmd.Name)
+		return
+	}
+
+	// Add the command with its name
+	a.Commands[cmd.Name] = cmd
+
+	// Add command aliases, checking for conflicts
+	for _, alias := range cmd.Aliases {
+		if alias == "" || alias == cmd.Name {
+			continue
 		}
-		a.Commands[cmd.Name] = cmd
-		for _, alias := range cmd.Aliases {
-			if alias != "" && alias != cmd.Name {
-				a.Commands[alias] = cmd
-			}
+
+		if existing, exists := a.Commands[alias]; exists && existing != cmd {
+			xlog.Warnf("Cannot add alias '%s' for command '%s': name already in use", alias, cmd.Name)
+			continue
 		}
+		a.Commands[alias] = cmd
 	}
 }
 
@@ -220,10 +234,6 @@ func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error
 		return fmt.Errorf("nil command provided")
 	}
 
-	if cmd.Run == nil {
-		return fmt.Errorf("command %s has no run function", cmd.Name)
-	}
-
 	if cmd.Flags == nil {
 		cmd.Flags = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
 		cmd.Flags.SetOutput(io.Discard)
@@ -232,12 +242,17 @@ func (a *App) runCommand(ctx context.Context, cmd *Command, args []string) error
 		return err
 	}
 
-	// Check for subcommands recursively
+	// Check for subcommands first
 	if len(cmd.Flags.Args()) > 0 && cmd.SubCommands != nil {
 		subCmdName := cmd.Flags.Arg(0)
 		if subCmd, exists := cmd.SubCommands[subCmdName]; exists {
 			return a.runCommand(ctx, subCmd, cmd.Flags.Args()[1:])
 		}
+	}
+
+	// If no subcommand matched, execute the command's Run function
+	if cmd.Run == nil {
+		return fmt.Errorf("command %s has no run function", cmd.Name)
 	}
 
 	// Execute the command's Run function
@@ -299,12 +314,19 @@ func (a *App) PrintHelp() {
 	if len(a.Commands) > 0 {
 		xcolor.Println(xcolor.Yellow, "Commands:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+		// Create a map to track unique commands
+		seen := make(map[*Command]bool)
 		var visibleCommands []*Command
+
 		for _, cmd := range a.Commands {
-			if !cmd.Hidden && cmd.Name == cmd.Name {
+			// Only include non-hidden commands that haven't been seen yet
+			if !cmd.Hidden && !seen[cmd] {
 				visibleCommands = append(visibleCommands, cmd)
+				seen[cmd] = true
 			}
 		}
+
 		sort.Slice(visibleCommands, func(i, j int) bool {
 			return visibleCommands[i].Name < visibleCommands[j].Name
 		})
@@ -373,22 +395,24 @@ func (a *App) PrintCommandHelp(cmdName string) {
 
 // Added method to support command suggestions
 func (a *App) suggestCommands(input string) []string {
-	// Collect all command names and aliases
-	var allCommands []string
+	// Use a map to deduplicate command suggestions
+	uniqueSuggestions := make(map[string]struct{})
+
+	// Collect all command names and aliases, filtering out duplicates
 	for name, cmd := range a.Commands {
-		if !cmd.Hidden {
-			allCommands = append(allCommands, name)
-			allCommands = append(allCommands, cmd.Aliases...)
+		if !cmd.Hidden && strings.HasPrefix(name, input) {
+			uniqueSuggestions[name] = struct{}{}
 		}
 	}
 
-	// Find commands that are close to the input
-	var suggestions []string
-	for _, name := range allCommands {
-		if strings.HasPrefix(name, input) {
-			suggestions = append(suggestions, name)
-		}
+	// Convert map keys to a slice
+	suggestions := make([]string, 0, len(uniqueSuggestions))
+	for name := range uniqueSuggestions {
+		suggestions = append(suggestions, name)
 	}
+
+	// Sort suggestions for consistent output
+	sort.Strings(suggestions)
 	return suggestions
 }
 

@@ -68,9 +68,9 @@ func main() {
 	printCronGuide()
 
 	// Add jobs and print their details
-	xcolor.Println(xcolor.Bold, "\nConfigured Jobs:")
+	xcolor.Println(xcolor.Bold, "%s", "\nConfigured Jobs:")
 	xcolor.Println(xcolor.White, "%-25s %-20s %s", "Name", "Expression", "Description")
-	xcolor.Println(xcolor.White, strings.Repeat("-", 80))
+	xcolor.Println(xcolor.White, "%s", strings.Repeat("-", 80))
 
 	jobIDs := make(map[string]string)
 	for _, ex := range examples {
@@ -139,8 +139,9 @@ func createColoredProgressBar(current, total int) string {
 		}
 	}
 	bar.WriteString("]")
-	return xcolor.SprintMulti([]xcolor.ColorCode{xcolor.Purple}, bar.String())
+	return xcolor.SprintMulti([]xcolor.ColorCode{xcolor.Purple}, "%s", bar.String())
 }
+
 func printCronGuide() {
 	guide := `
 Cron Expression Format:
@@ -159,5 +160,5 @@ n-m - Range from n to m
 n,m,k - Specific values
 n-m/k - Every k units between n-m
 `
-	xcolor.Println(xcolor.Cyan, guide)
+	xcolor.Println(xcolor.Cyan, "%s", guide)
 }

@@ -161,34 +161,60 @@ func (c *Cron) run() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		now := time.Now().In(c.location)
+		var jobsToRun []*jobEntry
+		var jobsToUpdate map[*jobEntry]time.Time
+
+		// First, get jobs that need to run with a read lock
 		c.mutex.RLock()
 		if !c.running {
 			c.mutex.RUnlock()
 			return
 		}
 
-		now := time.Now().In(c.location)
+		jobsToUpdate = make(map[*jobEntry]time.Time)
+
 		for _, job := range c.jobs {
 			if job.next.IsZero() {
-				job.next = job.schedule.Next(now)
+				nextRun := job.schedule.Next(now)
+				jobsToUpdate[job] = nextRun
 				continue
 			}
 
 			if now.After(job.next) || now.Equal(job.next) {
-				go func(j *jobEntry) {
-					defer func() {
-						if r := recover(); r != nil {
-							if c.errorHandler != nil {
-								c.errorHandler(fmt.Errorf("job panic: %v", r))
-							}
-						}
-					}()
-					j.job()
-				}(job)
-				job.next = job.schedule.Next(now)
+				// Create a copy to avoid data races
+				jobCopy := *job // Make a copy of the job struct
+				jobsToRun = append(jobsToRun, &jobCopy)
+
+				// Track the job that needs its next execution time updated
+				nextRun := job.schedule.Next(now)
+				jobsToUpdate[job] = nextRun
 			}
 		}
 		c.mutex.RUnlock()
+
+		// Update the next execution times with a write lock
+		if len(jobsToUpdate) > 0 {
+			c.mutex.Lock()
+			for job, nextTime := range jobsToUpdate {
+				job.next = nextTime
+			}
+			c.mutex.Unlock()
+		}
+
+		// Execute jobs without holding any lock
+		for _, job := range jobsToRun {
+			go func(j *jobEntry) {
+				defer func() {
+					if r := recover(); r != nil {
+						if c.errorHandler != nil {
+							c.errorHandler(fmt.Errorf("job panic: %v", r))
+						}
+					}
+				}()
+				j.job()
+			}(job)
+		}
 	}
 }
 

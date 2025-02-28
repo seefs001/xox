@@ -1023,38 +1023,56 @@ type Iterator struct {
 
 // Add transaction methods
 func (db *DB) NewTransaction(update bool) *Txn {
-	db.txnLock.Lock()
-	defer db.txnLock.Unlock()
+	db.txMutex.Lock()
+	defer db.txMutex.Unlock()
 
-	return &Txn{
+	txn := &Txn{
 		db:       db,
 		readTs:   atomic.LoadUint64(&db.txCounter),
 		writes:   make(map[string]*Entry),
+		pending:  make([]*Entry, 0),
 		conflict: make(map[string]struct{}),
 		readOnly: !update,
 	}
+
+	return txn
 }
 
 func (txn *Txn) Get(key string) (Entry, error) {
 	txn.mutex.Lock()
 	defer txn.mutex.Unlock()
 
-	// Check writes first
-	if entry, ok := txn.writes[key]; ok {
+	// First check if the key exists in the transaction's writes
+	if entry, exists := txn.writes[key]; exists {
 		return *entry, nil
 	}
 
-	// Read from DB with snapshot isolation
+	// Otherwise read from the DB
 	txn.db.mutex.RLock()
-	defer txn.db.mutex.RUnlock()
+	entry, exists := txn.db.data[key]
+	txn.db.mutex.RUnlock()
 
-	if entry, ok := txn.db.data[key]; ok {
-		if entry.Version <= txn.readTs {
-			return entry, nil
+	if !exists {
+		return Entry{}, ErrKeyNotFound
+	}
+
+	// Store this read for conflict detection
+	if !txn.readOnly {
+		txn.conflict[key] = struct{}{}
+	}
+
+	// For read consistency, keep a snapshot of the entry at the time the transaction started
+	if entry.Version > txn.readTs && len(entry.Versions) > 0 {
+		// Find the version that was active at the time the transaction started
+		for _, ver := range entry.Versions {
+			if ver.Version <= txn.readTs {
+				entry.Value = ver.Value
+				break
+			}
 		}
 	}
 
-	return Entry{}, ErrKeyNotFound
+	return entry, nil
 }
 
 func (txn *Txn) Set(key string, entry Entry) error {
@@ -1110,7 +1128,32 @@ func (txn *Txn) Commit() error {
 	// Apply changes
 	txn.db.mutex.Lock()
 	for key, entry := range txn.writes {
+		// Save the current version for history if versioning is enabled
+		if txn.db.options.EnableVersioning {
+			if oldEntry, exists := txn.db.data[key]; exists {
+				// Create a versioned entry from the current value
+				versionedEntry := VersionedEntry{
+					Value:       oldEntry.Value,
+					Version:     oldEntry.Version,
+					Created:     oldEntry.Created,
+					LastUpdated: oldEntry.LastUpdated,
+				}
+
+				// Add to version history
+				entry.Versions = append([]VersionedEntry{versionedEntry}, oldEntry.Versions...)
+
+				// Limit the number of versions if configured
+				if txn.db.options.MaxVersions > 0 && len(entry.Versions) > txn.db.options.MaxVersions {
+					entry.Versions = entry.Versions[:txn.db.options.MaxVersions]
+				}
+			}
+		}
+
 		entry.Version = newTxID
+		entry.LastUpdated = time.Now()
+		if entry.Created.IsZero() {
+			entry.Created = entry.LastUpdated
+		}
 		txn.db.data[key] = *entry
 	}
 	txn.db.mutex.Unlock()

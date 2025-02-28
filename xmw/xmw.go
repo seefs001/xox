@@ -118,7 +118,7 @@ func Logger(config ...LoggerConfig) Middleware {
 			if cfg.LogHandler != nil {
 				cfg.LogHandler(log, attrs)
 			} else if cfg.UseColor {
-				xcolor.Print(xcolor.Reset, log)
+				xcolor.Print(xcolor.Reset, "%s", log)
 			} else {
 				_, _ = cfg.Output.Write([]byte(log))
 			}
@@ -135,13 +135,13 @@ func colorizeLogValue(key string, statusCode int, value string) string {
 		} else if statusCode >= 400 {
 			statusColor = xcolor.Red
 		}
-		return xcolor.Sprint(statusColor, value)
+		return xcolor.Sprint(statusColor, "%s", value)
 	case "latency":
-		return xcolor.Sprint(xcolor.Cyan, value)
+		return xcolor.Sprint(xcolor.Cyan, "%s", value)
 	case "method":
-		return xcolor.Sprint(xcolor.Blue, value)
+		return xcolor.Sprint(xcolor.Blue, "%s", value)
 	case "path":
-		return xcolor.Sprint(xcolor.Purple, value)
+		return xcolor.Sprint(xcolor.Purple, "%s", value)
 	default:
 		return value
 	}
